@@ -17,12 +17,14 @@ def get_checkpoint():
     return 0
 
 def load_existing_emails():
+    """Reads leads.csv to prevent duplicates across runs."""
     emails = set()
     if os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE, "r", encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                if row.get("Email"): emails.add(row["Email"].lower().strip())
+                if row.get("Email"):
+                    emails.add(row["Email"].lower().strip())
     return emails
 
 def scrape():
@@ -35,7 +37,7 @@ def scrape():
     start_index = get_checkpoint()
     existing_emails = load_existing_emails()
     
-    # 1. Check Total Count
+    # Check total count from PubMed
     search_handle = Entrez.esearch(db="pubmed", term=query, retmax=0)
     total_count = int(Entrez.read(search_handle)["Count"])
     
@@ -45,11 +47,12 @@ def scrape():
 
     print(f"Batch: {start_index} to {start_index + BATCH_SIZE} | Total: {total_count}")
 
-    # 2. Fetch Data
+    # Fetch IDs
     fetch_handle = Entrez.esearch(db="pubmed", term=query, retstart=start_index, retmax=BATCH_SIZE)
     id_list = Entrez.read(fetch_handle)["IdList"]
     if not id_list: return
 
+    # Fetch article details
     details_handle = Entrez.efetch(db="pubmed", id=",".join(id_list), retmode="xml")
     articles = Entrez.read(details_handle)
     
@@ -66,13 +69,14 @@ def scrape():
                     if "@" in aff_text:
                         email = [w for w in aff_text.split() if "@" in w][0].strip('.,').lower().strip()
                         name = f"{author.get('ForeName', '')} {author.get('LastName', '')}"
+                        
                         if email not in existing_emails and email not in batch_emails:
                             new_leads.append([title, name, email, "Immuno-Oncology"])
                             batch_emails.add(email)
-                        break
+                        break 
         except: continue
 
-    # 3. Save
+    # Save unique leads
     file_exists = os.path.isfile(OUTPUT_FILE)
     with open(OUTPUT_FILE, "a", newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
@@ -80,10 +84,11 @@ def scrape():
             writer.writerow(["Title", "Author Name", "Email", "Area of Interest"])
         writer.writerows(new_leads)
 
+    # Update progress
     with open(CHECKPOINT_FILE, "w") as f:
         f.write(str(start_index + BATCH_SIZE))
     
-    print(f"Added {len(new_leads)} unique leads. Next start: {start_index + BATCH_SIZE}")
+    print(f"Added {len(new_leads)} unique leads. Current total unique leads: {len(existing_emails) + len(new_leads)}")
 
 if __name__ == "__main__":
     scrape()
