@@ -1,10 +1,9 @@
 name: PubMed Continuous Scraper
 
 on:
-  workflow_dispatch: # Allows manual start
-  push:
-    paths:
-      - 'trigger.txt' # Run if we change this file
+  workflow_dispatch: # Allows you to start it manually
+  schedule:
+    - cron: '*/10 * * * *' # Automatically runs every 10 minutes
 
 jobs:
   scrape:
@@ -28,7 +27,6 @@ jobs:
         run: |
           python scraper.py > output.log
           cat output.log
-          # Check if the log says we are finished
           if grep -q "FINISHED" output.log; then
             echo "completed=true" >> $GITHUB_OUTPUT
           else
@@ -36,18 +34,10 @@ jobs:
           fi
 
       - name: Commit and Push Changes
+        if: success()
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          git commit -m "Update leads and checkpoint" || exit 0
-          git push
-
-      - name: Loop Next Batch
-        if: steps.run_scraper.outputs.completed == 'false'
-        run: |
-          sleep 10
-          echo $(date) > trigger.txt
-          git add trigger.txt
-          git commit -m "Triggering next batch"
+          git commit -m "Update leads and checkpoint [skip ci]" || exit 0
           git push
