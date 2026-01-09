@@ -1,3 +1,2 @@
-Checking PubMed for: ("immuno-oncology" OR "tumor immunology" OR "cancer immunotherapy" OR "T-cell killing" OR "NK cell" OR "CAR-T" OR "cytotoxicity") AND ("in vitro" OR "cell culture" OR "monolayer" OR "2D" OR "3D" OR "co-culture" OR "organoid" OR "spheroid")
-Processing batch: 0 to 500 (Total: 111947)
-Saved 400 new leads. Next checkpoint: 500
+Batch: 500 to 1000 | Total: 111947
+Added 391 unique leads. Next checkpoint: 1000
