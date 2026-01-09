@@ -6,8 +6,10 @@ on:
       search_query:
         description: 'PubMed Search Query'
         required: false
+  repository_dispatch:
+    types: [next_batch]
   schedule:
-    - cron: '*/10 * * * *' # Runs every 10 minutes
+    - cron: '*/30 * * * *' # Backup timer
 
 jobs:
   scrape:
@@ -27,7 +29,6 @@ jobs:
         run: pip install biopython
 
       - name: Run Scraper
-        # Using environment variables is the safest way to handle special characters
         env:
           INPUT_QUERY: ${{ github.event.inputs.search_query }}
         run: |
@@ -36,7 +37,13 @@ jobs:
             echo "0" > checkpoint.txt
             rm -f leads.csv
           fi
-          python scraper.py
+          python scraper.py > output.log
+          cat output.log
+          if grep -q "FINISHED" output.log; then
+            echo "STATUS=DONE" >> $GITHUB_ENV
+          else
+            echo "STATUS=CONTINUE" >> $GITHUB_ENV
+          fi
 
       - name: Update README Dashboard
         run: |
@@ -45,10 +52,17 @@ jobs:
             sed -i "s/\*\*Total Unique Leads:\*\* [0-9]*/\*\*Total Unique Leads:\*\* $COUNT/" README.md
           fi
 
-      - name: Commit and Push Changes
+      - name: Commit and Push
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          git commit -m "Update leads and dashboard [skip ci]" || exit 0
+          git commit -m "Update Leads [skip ci]" || exit 0
           git push
+
+      - name: Trigger Next Batch
+        if: env.STATUS == 'CONTINUE'
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: next_batch
