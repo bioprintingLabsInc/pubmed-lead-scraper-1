@@ -26,9 +26,8 @@ def load_existing_emails():
     return emails
 
 def scrape():
-    # Load query from file
     if not os.path.exists(QUERY_FILE):
-        print("No query found in last_query.txt. Please start a search first.")
+        print("No query found. Please start a search from the Actions tab.")
         return
     with open(QUERY_FILE, "r") as f:
         query = f.read().strip()
@@ -36,7 +35,7 @@ def scrape():
     start_index = get_checkpoint()
     existing_emails = load_existing_emails()
     
-    # 1. Get Total Count
+    # 1. Check Total Count
     search_handle = Entrez.esearch(db="pubmed", term=query, retmax=0)
     total_count = int(Entrez.read(search_handle)["Count"])
     
@@ -65,29 +64,26 @@ def scrape():
                 for aff in author.get('AffiliationInfo', []):
                     aff_text = aff.get('Affiliation', '')
                     if "@" in aff_text:
-                        # Extract email
                         email = [w for w in aff_text.split() if "@" in w][0].strip('.,').lower().strip()
                         name = f"{author.get('ForeName', '')} {author.get('LastName', '')}"
-                        # Deduplication logic
                         if email not in existing_emails and email not in batch_emails:
                             new_leads.append([title, name, email, "Immuno-Oncology"])
                             batch_emails.add(email)
                         break
         except: continue
 
-    # 3. Save to leads.csv
+    # 3. Save
     file_exists = os.path.isfile(OUTPUT_FILE)
     with open(OUTPUT_FILE, "a", newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["Title", "Author Name", "Email", "Interest"])
+            writer.writerow(["Title", "Author Name", "Email", "Area of Interest"])
         writer.writerows(new_leads)
 
-    # 4. Update Checkpoint
     with open(CHECKPOINT_FILE, "w") as f:
         f.write(str(start_index + BATCH_SIZE))
     
-    print(f"Added {len(new_leads)} unique leads. Next checkpoint: {start_index + BATCH_SIZE}")
+    print(f"Added {len(new_leads)} unique leads. Next start: {start_index + BATCH_SIZE}")
 
 if __name__ == "__main__":
     scrape()
