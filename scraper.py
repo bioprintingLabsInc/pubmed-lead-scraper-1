@@ -1,20 +1,21 @@
+import os
 import re
 import pandas as pd
 from Bio import Entrez
-import os
 
-# Identify yourself to NCBI
+# Configuration
+# NCBI requires a valid email for their API
 Entrez.email = "manavvanga@gmail.com" 
+# This pulls the key you saved in GitHub Secrets
+Entrez.api_key = os.environ.get('NCBI_API_KEY') 
 
-def fetch_data(query_or_url):
-    # Extract ID if URL is provided
-    if "pubmed.ncbi.nlm.nih.gov" in query_or_url:
-        pmid = re.search(r'pubmed\.ncbi\.nlm\.nih\.gov/(\d+)', query_or_url).group(1)
-        id_list = [pmid]
-    else:
-        # Search by Keyword
-        search_handle = Entrez.esearch(db="pubmed", term=query_or_url, retmax=10)
-        id_list = Entrez.read(search_handle)["IdList"]
+def fetch_data(query):
+    # This adds the 5-year filter to your specific query
+    full_query = f"({query}) AND (last 5 years[dp])"
+    
+    # We set retmax to 200 to start. You can increase this up to 500 later.
+    search_handle = Entrez.esearch(db="pubmed", term=full_query, retmax=200)
+    id_list = Entrez.read(search_handle)["IdList"]
 
     if not id_list:
         return []
@@ -24,41 +25,46 @@ def fetch_data(query_or_url):
     
     results = []
     for article in records['PubmedArticle']:
-        title = article['MedlineCitation']['Article'].get('ArticleTitle', 'N/A')
-        
-        # Area of Interest (Keywords)
-        keywords = article['MedlineCitation'].get('KeywordList', [[]])
-        interest = ", ".join([str(k) for k in keywords[0]]) if keywords else "N/A"
-        
-        # Authors and Emails
-        for author in article['MedlineCitation']['Article'].get('AuthorList', []):
-            name = f"{author.get('ForeName', '')} {author.get('LastName', '')}"
-            affils = author.get('AffiliationInfo', [])
+        try:
+            title = article['MedlineCitation']['Article'].get('ArticleTitle', 'N/A')
             
-            email = "N/A"
-            affiliation_text = "N/A"
-            if affils:
-                affiliation_text = affils[0].get('Affiliation', '')
-                email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', affiliation_text)
-                email = email_match.group(0) if email_match else "N/A"
+            # Area of Interest (Keywords & MeSH Terms)
+            keywords = article['MedlineCitation'].get('KeywordList', [[]])
+            interest = ", ".join([str(k) for k in keywords[0]]) if keywords else "N/A"
             
-            results.append({
-                "Title": title,
-                "Author": name,
-                "Email": email,
-                "Area of Interest": interest,
-                "Affiliation": affiliation_text
-            })
+            # Authors and Emails
+            for author in article['MedlineCitation']['Article'].get('AuthorList', []):
+                name = f"{author.get('ForeName', '')} {author.get('LastName', '')}"
+                affils = author.get('AffiliationInfo', [])
+                
+                email = "N/A"
+                affiliation_text = "N/A"
+                if affils:
+                    affiliation_text = affils[0].get('Affiliation', '')
+                    # Regex to find the email address
+                    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', affiliation_text)
+                    email = email_match.group(0) if email_match else "N/A"
+                
+                # Only add if an email was successfully extracted
+                if email != "N/A":
+                    results.append({
+                        "Title": title,
+                        "Author": name,
+                        "Email": email,
+                        "Area of Interest": interest,
+                        "Affiliation": affiliation_text
+                    })
+        except Exception:
+            continue
     return results
 
 if __name__ == "__main__":
-    # Change your keywords/URLs here
-    targets = ["CRISPR cancer therapy", "https://pubmed.ncbi.nlm.nih.gov/34251234/"]
+    # Your immuno-oncology and cell culture query
+    user_query = '("immuno-oncology" OR "tumor immunology" OR "cancer immunotherapy" OR "T-cell killing" OR "NK cell" OR "CAR-T" OR "cytotoxicity") AND ("in vitro" OR "cell culture" OR "monolayer" OR "2D" OR "3D" OR "co-culture" OR "organoid" OR "spheroid")'
     
-    all_results = []
-    for t in targets:
-        all_results.extend(fetch_data(t))
+    data = fetch_data(user_query)
     
-    df = pd.DataFrame(all_results)
+    df = pd.DataFrame(data)
+    # Save results to the main leads file
     df.to_csv("leads.csv", index=False)
-    print("leads.csv updated.")
+    print(f"leads.csv updated with {len(df)} professional contacts.")
