@@ -4,7 +4,7 @@ from Bio import Entrez
 import os
 
 # Identify yourself to NCBI
-Entrez.email = "your_email@example.com" 
+Entrez.email = "manavvanga@gmail.com" 
 
 def fetch_data(query_or_url):
     # Extract ID if URL is provided
