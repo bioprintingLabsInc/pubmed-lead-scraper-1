@@ -1,6 +1,6 @@
 # 🧬 PubMed Lead Generation Dashboard
 
-**Total Unique Leads:** 8988
+**Total Unique Leads:** 9288
 
 ### 🔍 Run New Search
 Paste your PubMed Boolean query below to restart the scraper with new keywords.
