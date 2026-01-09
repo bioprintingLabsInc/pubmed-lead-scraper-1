@@ -1,7 +1,7 @@
 name: PubMed Continuous Scraper
 
 on:
-  workflow_dispatch: # Allows you to start it manually
+  workflow_dispatch: # Allows you to start it manually whenever you want
   schedule:
     - cron: '*/10 * * * *' # Automatically runs every 10 minutes
 
@@ -27,6 +27,7 @@ jobs:
         run: |
           python scraper.py > output.log
           cat output.log
+          # Check if the python script printed "FINISHED"
           if grep -q "FINISHED" output.log; then
             echo "completed=true" >> $GITHUB_OUTPUT
           else
@@ -39,5 +40,6 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
+          # [skip ci] prevents the push itself from triggering an accidental second run
           git commit -m "Update leads and checkpoint [skip ci]" || exit 0
           git push
