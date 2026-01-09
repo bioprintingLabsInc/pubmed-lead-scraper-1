@@ -7,7 +7,7 @@ on:
         description: 'PubMed Search Query'
         required: false
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/10 * * * *' # Runs every 10 minutes
 
 jobs:
   scrape:
@@ -27,12 +27,12 @@ jobs:
         run: pip install biopython
 
       - name: Run Scraper
+        # Using environment variables is the safest way to handle special characters
+        env:
+          INPUT_QUERY: ${{ github.event.inputs.search_query }}
         run: |
-          # If search bar input exists, update last_query.txt
-          QUERY="${{ github.event.inputs.search_query }}"
-          if [ ! -z "$QUERY" ]; then
-            echo "$QUERY" > last_query.txt
-            # Reset checkpoint if a brand new search is started
+          if [ ! -z "$INPUT_QUERY" ]; then
+            echo "$INPUT_QUERY" > last_query.txt
             echo "0" > checkpoint.txt
             rm -f leads.csv
           fi
@@ -45,10 +45,10 @@ jobs:
             sed -i "s/\*\*Total Unique Leads:\*\* [0-9]*/\*\*Total Unique Leads:\*\* $COUNT/" README.md
           fi
 
-      - name: Commit and Push
+      - name: Commit and Push Changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          git commit -m "Update Leads and Dashboard [skip ci]" || exit 0
+          git commit -m "Update leads and dashboard [skip ci]" || exit 0
           git push
