@@ -1,7 +1,7 @@
 name: PubMed Continuous Scraper
 
 on:
-  workflow_dispatch: # Allows you to start it manually whenever you want
+  workflow_dispatch:
   schedule:
     - cron: '*/10 * * * *' # Automatically runs every 10 minutes
 
@@ -27,11 +27,23 @@ jobs:
         run: |
           python scraper.py > output.log
           cat output.log
-          # Check if the python script printed "FINISHED"
           if grep -q "FINISHED" output.log; then
             echo "completed=true" >> $GITHUB_OUTPUT
           else
             echo "completed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update Lead Count in README
+        if: success()
+        run: |
+          if [ -f leads.csv ]; then
+            COUNT=$(($(wc -l < leads.csv) - 1))
+            # Create or update the 'Total Unique Leads' line
+            if grep -q "Total Unique Leads:" README.md; then
+              sed -i "s/^Total Unique Leads: .*/Total Unique Leads: $COUNT/" README.md
+            else
+              echo -e "Total Unique Leads: $COUNT\n\n$(cat README.md)" > README.md
+            fi
           fi
 
       - name: Commit and Push Changes
@@ -40,6 +52,5 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          # [skip ci] prevents the push itself from triggering an accidental second run
-          git commit -m "Update leads and checkpoint [skip ci]" || exit 0
+          git commit -m "Update leads, checkpoint, and README [skip ci]" || exit 0
           git push
