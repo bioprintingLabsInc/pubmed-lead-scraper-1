@@ -1,15 +1,25 @@
 import os
 import csv
 from Bio import Entrez
+from datetime import datetime
 
 # --- CONFIGURATION ---
-Entrez.email = "manavvanga@gmail.com"
-CHECKPOINT_FILE = "checkpoint.txt"
+Entrez.email = "manavvanga@gmail.com" 
 OUTPUT_FILE = "leads.csv"
 QUERY_FILE = "last_query.txt"
+CHECKPOINT_FILE = "checkpoint.txt"  # Tracks progress within a single year
+YEAR_CHECKPOINT = "year_checkpoint.txt" # Tracks which year we are in
 BATCH_SIZE = 500
 
-def get_checkpoint():
+def get_year_checkpoint():
+    """Starts at 2026 and works back to 2021."""
+    if os.path.exists(YEAR_CHECKPOINT):
+        with open(YEAR_CHECKPOINT, "r") as f:
+            try: return int(f.read().strip())
+            except: return 2026
+    return 2026
+
+def get_batch_checkpoint():
     if os.path.exists(CHECKPOINT_FILE):
         with open(CHECKPOINT_FILE, "r") as f:
             try: return int(f.read().strip())
@@ -17,7 +27,7 @@ def get_checkpoint():
     return 0
 
 def load_existing_emails():
-    """Reads leads.csv to prevent duplicates across runs."""
+    """CRITICAL: Loads current leads to prevent any double entries."""
     emails = set()
     if os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE, "r", encoding='utf-8') as f:
@@ -32,27 +42,42 @@ def scrape():
         print("No query found. Please start a search from the Actions tab.")
         return
     with open(QUERY_FILE, "r") as f:
-        query = f.read().strip()
+        base_query = f.read().strip()
 
-    start_index = get_checkpoint()
-    existing_emails = load_existing_emails()
+    current_year = get_year_checkpoint()
     
-    # Check total count from PubMed
-    search_handle = Entrez.esearch(db="pubmed", term=query, retmax=0)
-    total_count = int(Entrez.read(search_handle)["Count"])
-    
-    if start_index >= total_count:
-        print(f"FINISHED: All {total_count} papers scanned.")
+    # Stop once we have finished the 5th year (2021)
+    if current_year < 2021:
+        print("FINISHED: All 5 years (2021-2026) have been scanned.")
         return
 
-    print(f"Batch: {start_index} to {start_index + BATCH_SIZE} | Total: {total_count}")
+    batch_start = get_batch_checkpoint()
+    existing_emails = load_existing_emails()
 
-    # Fetch IDs
-    fetch_handle = Entrez.esearch(db="pubmed", term=query, retstart=start_index, retmax=BATCH_SIZE)
+    # Create a year-specific query to bypass the 9,999 limit
+    year_query = f"({base_query}) AND {current_year}[dp]"
+    
+    search_handle = Entrez.esearch(db="pubmed", term=year_query, retmax=0)
+    total_for_year = int(Entrez.read(search_handle)["Count"])
+    
+    print(f"--- Year: {current_year} | Total for Year: {total_for_year} | Existing Leads: {len(existing_emails)} ---")
+
+    # If the current year's results are exhausted, move to the previous year
+    if batch_start >= total_for_year or batch_start >= 9999:
+        print(f"Year {current_year} complete. Moving to {current_year - 1}")
+        with open(YEAR_CHECKPOINT, "w") as f: f.write(str(current_year - 1))
+        with open(CHECKPOINT_FILE, "w") as f: f.write("0")
+        return 
+
+    # Fetch IDs for the current batch
+    fetch_handle = Entrez.esearch(db="pubmed", term=year_query, retstart=batch_start, retmax=BATCH_SIZE)
     id_list = Entrez.read(fetch_handle)["IdList"]
-    if not id_list: return
 
-    # Fetch article details
+    if not id_list:
+        with open(YEAR_CHECKPOINT, "w") as f: f.write(str(current_year - 1))
+        with open(CHECKPOINT_FILE, "w") as f: f.write("0")
+        return
+
     details_handle = Entrez.efetch(db="pubmed", id=",".join(id_list), retmode="xml")
     articles = Entrez.read(details_handle)
     
@@ -70,13 +95,14 @@ def scrape():
                         email = [w for w in aff_text.split() if "@" in w][0].strip('.,').lower().strip()
                         name = f"{author.get('ForeName', '')} {author.get('LastName', '')}"
                         
+                        # Only add if it's NOT in our existing 7,723 leads
                         if email not in existing_emails and email not in batch_emails:
-                            new_leads.append([title, name, email, "Immuno-Oncology"])
+                            new_leads.append([title, name, email, f"Immuno-Oncology ({current_year})"])
                             batch_emails.add(email)
-                        break 
+                        break
         except: continue
 
-    # Save unique leads
+    # Save to CSV
     file_exists = os.path.isfile(OUTPUT_FILE)
     with open(OUTPUT_FILE, "a", newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
@@ -86,9 +112,9 @@ def scrape():
 
     # Update progress
     with open(CHECKPOINT_FILE, "w") as f:
-        f.write(str(start_index + BATCH_SIZE))
+        f.write(str(batch_start + BATCH_SIZE))
     
-    print(f"Added {len(new_leads)} unique leads. Current total unique leads: {len(existing_emails) + len(new_leads)}")
+    print(f"Added {len(new_leads)} unique leads. Next batch: {batch_start + BATCH_SIZE}")
 
 if __name__ == "__main__":
     scrape()
