@@ -1,14 +1,10 @@
-name: PubMed Continuous Scraper # This fixes your sidebar name
+name: PubMed Continuous Scraper
 
 on:
-  workflow_dispatch:
-    inputs:
-      keyword:
-        description: 'Enter PubMed Search Keyword'
-        required: true
-        default: '("immuno-oncology" OR "tumor immunology")'
-  repository_dispatch:
-    types: [next_batch]
+  workflow_dispatch: # Allows manual start
+  push:
+    paths:
+      - 'trigger.txt' # Run if we change this file
 
 jobs:
   scrape:
@@ -16,29 +12,42 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      - run: pip install biopython pandas
+
+      - name: Install Dependencies
+        run: pip install biopython
 
       - name: Run Scraper
-        env:
-          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
-          SEARCH_KEYWORD: ${{ github.event.inputs.keyword || github.event.client_payload.keyword }}
-        run: python scraper.py
+        id: run_scraper
+        run: |
+          python scraper.py > output.log
+          cat output.log
+          # Check if the log says we are finished
+          if grep -q "FINISHED" output.log; then
+            echo "completed=true" >> $GITHUB_OUTPUT
+          else
+            echo "completed=false" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Save Data
+      - name: Commit and Push Changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          git commit -m "Updated leads" || exit 0
+          git commit -m "Update leads and checkpoint" || exit 0
           git push
 
       - name: Loop Next Batch
+        if: steps.run_scraper.outputs.completed == 'false'
         run: |
-          curl -X POST -H "Authorization: token ${{ secrets.MY_GITHUB_TOKEN }}" \
-          -H "Accept: application/vnd.github.v3+json" \
-          https://api.github.com/repos/${{ github.repository }}/actions/workflows/scrape_task.yml/dispatches \
-          -d '{"ref":"main", "inputs": {"keyword": "${{ github.event.inputs.keyword || github.event.client_payload.keyword }}"}}'
+          sleep 10
+          echo $(date) > trigger.txt
+          git add trigger.txt
+          git commit -m "Triggering next batch"
+          git push
