@@ -4,17 +4,14 @@ import pandas as pd
 from Bio import Entrez
 
 # Configuration
-# NCBI requires a valid email for their API
 Entrez.email = "manavvanga@gmail.com" 
-# This pulls the key you saved in GitHub Secrets
 Entrez.api_key = os.environ.get('NCBI_API_KEY') 
 
 def fetch_data(query):
-    # This adds the 5-year filter to your specific query
     full_query = f"({query}) AND (last 5 years[dp])"
     
-    # We set retmax to 200 to start. You can increase this up to 500 later.
-    search_handle = Entrez.esearch(db="pubmed", term=full_query, retmax=200)
+    # Increased retmax to 500 for more leads
+    search_handle = Entrez.esearch(db="pubmed", term=full_query, retmax=500)
     id_list = Entrez.read(search_handle)["IdList"]
 
     if not id_list:
@@ -27,30 +24,24 @@ def fetch_data(query):
     for article in records['PubmedArticle']:
         try:
             title = article['MedlineCitation']['Article'].get('ArticleTitle', 'N/A')
-            
-            # Area of Interest (Keywords & MeSH Terms)
             keywords = article['MedlineCitation'].get('KeywordList', [[]])
             interest = ", ".join([str(k) for k in keywords[0]]) if keywords else "N/A"
             
-            # Authors and Emails
             for author in article['MedlineCitation']['Article'].get('AuthorList', []):
                 name = f"{author.get('ForeName', '')} {author.get('LastName', '')}"
                 affils = author.get('AffiliationInfo', [])
                 
                 email = "N/A"
-                affiliation_text = "N/A"
                 if affils:
                     affiliation_text = affils[0].get('Affiliation', '')
-                    # Regex to find the email address
                     email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', affiliation_text)
                     email = email_match.group(0) if email_match else "N/A"
                 
-                # Only add if an email was successfully extracted
                 if email != "N/A":
                     results.append({
                         "Title": title,
                         "Author": name,
-                        "Email": email,
+                        "Email": email.lower(), # Save in lowercase for better de-duplication
                         "Area of Interest": interest,
                         "Affiliation": affiliation_text
                     })
@@ -59,12 +50,23 @@ def fetch_data(query):
     return results
 
 if __name__ == "__main__":
-    # Your immuno-oncology and cell culture query
     user_query = '("immuno-oncology" OR "tumor immunology" OR "cancer immunotherapy" OR "T-cell killing" OR "NK cell" OR "CAR-T" OR "cytotoxicity") AND ("in vitro" OR "cell culture" OR "monolayer" OR "2D" OR "3D" OR "co-culture" OR "organoid" OR "spheroid")'
     
-    data = fetch_data(user_query)
-    
-    df = pd.DataFrame(data)
-    # Save results to the main leads file
-    df.to_csv("leads.csv", index=False)
-    print(f"leads.csv updated with {len(df)} professional contacts.")
+    # 1. Fetch new data
+    new_data = fetch_data(user_query)
+    new_df = pd.DataFrame(new_data)
+
+    # 2. De-duplication Logic
+    if os.path.exists("leads.csv"):
+        # Load existing leads
+        existing_df = pd.read_csv("leads.csv")
+        # Combine new and old data
+        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+        # Remove duplicates based on the Email column, keeping the first instance
+        final_df = combined_df.drop_duplicates(subset=['Email'], keep='first')
+    else:
+        final_df = new_df
+
+    # 3. Save the clean list
+    final_df.to_csv("leads.csv", index=False)
+    print(f"leads.csv updated. Total unique contacts: {len(final_df)}")
