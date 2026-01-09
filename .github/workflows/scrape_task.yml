@@ -9,7 +9,7 @@ on:
   repository_dispatch:
     types: [next_batch]
   schedule:
-    - cron: '*/20 * * * *' # Backup every 20 minutes
+    - cron: '*/20 * * * *' # Backup timer
 
 jobs:
   scrape:
@@ -20,7 +20,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 # Necessary for rebase
+          fetch-depth: 0 
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -54,13 +54,24 @@ jobs:
             sed -i "s/\*\*Total Unique Leads:\*\* [0-9]*/\*\*Total Unique Leads:\*\* $COUNT/" README.md
           fi
 
-      - name: Commit and Push (Safe Rebase)
+      - name: Commit and Push (Conflict Protection)
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
+          
+          # 1. Hide new changes temporarily
+          git stash
+          
+          # 2. Pull latest from server
           git pull --rebase origin main
-          git commit -m "Update Leads [skip ci]" || exit 0
+          
+          # 3. Bring back your new leads
+          git stash pop || echo "No local changes to re-apply"
+          
+          # 4. Finalize commit and push
+          git add .
+          git commit -m "Update Leads and Checkpoint [skip ci]" || exit 0
           git push
 
       - name: Auto-Trigger Next Batch
