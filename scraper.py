@@ -4,7 +4,7 @@ import time
 from Bio import Entrez
 
 # --- CONFIGURATION ---
-Entrez.email = "your-email@example.com" # Required by NCBI
+Entrez.email = "manavvanga@gmail.com" # Required by NCBI
 # Use your full 31,065-result query here:
 SEARCH_QUERY = '("immuno-oncology" OR "tumor immunology" OR "cancer immunotherapy" OR "T-cell killing" OR "NK cell" OR "CAR-T" OR "cytotoxicity") AND ("in vitro" OR "cell culture" OR "monolayer" OR "2D" OR "3D" OR "co-culture" OR "organoid" OR "spheroid")'
 BATCH_SIZE = 500
