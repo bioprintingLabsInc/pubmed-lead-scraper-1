@@ -7,66 +7,68 @@ from Bio import Entrez
 Entrez.email = "manavvanga@gmail.com" 
 Entrez.api_key = os.environ.get('NCBI_API_KEY') 
 
-def fetch_data(query):
-    full_query = f"({query}) AND (last 5 years[dp])"
+def run_scraper():
+    query = '("immuno-oncology" OR "tumor immunology" OR "cancer immunotherapy" OR "T-cell killing" OR "NK cell" OR "CAR-T" OR "cytotoxicity") AND ("in vitro" OR "cell culture" OR "monolayer" OR "2D" OR "3D" OR "co-culture" OR "organoid" OR "spheroid") AND (last 5 years[dp])'
     
-    # Increased retmax to 500 for more leads
-    search_handle = Entrez.esearch(db="pubmed", term=full_query, retmax=500)
-    id_list = Entrez.read(search_handle)["IdList"]
+    # 1. Determine where we left off
+    start_index = 0
+    if os.path.exists("checkpoint.txt"):
+        with open("checkpoint.txt", "r") as f:
+            start_index = int(f.read().strip())
 
-    if not id_list:
-        return []
+    print(f"Starting batch at index: {start_index}")
 
-    fetch_handle = Entrez.efetch(db="pubmed", id=id_list, retmode="xml")
+    # 2. Search for the next 500 IDs
+    search_handle = Entrez.esearch(db="pubmed", term=query, retstart=start_index, retmax=500)
+    search_results = Entrez.read(search_handle)
+    ids = search_results["IdList"]
+    total_results = int(search_results["Count"])
+
+    if not ids:
+        print("No more results found.")
+        return False # Signal to stop the loop
+
+    # 3. Fetch and Parse
+    fetch_handle = Entrez.efetch(db="pubmed", id=ids, retmode="xml")
     records = Entrez.read(fetch_handle)
     
-    results = []
+    new_leads = []
     for article in records['PubmedArticle']:
         try:
             title = article['MedlineCitation']['Article'].get('ArticleTitle', 'N/A')
-            keywords = article['MedlineCitation'].get('KeywordList', [[]])
-            interest = ", ".join([str(k) for k in keywords[0]]) if keywords else "N/A"
-            
             for author in article['MedlineCitation']['Article'].get('AuthorList', []):
-                name = f"{author.get('ForeName', '')} {author.get('LastName', '')}"
                 affils = author.get('AffiliationInfo', [])
-                
-                email = "N/A"
                 if affils:
-                    affiliation_text = affils[0].get('Affiliation', '')
-                    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', affiliation_text)
-                    email = email_match.group(0) if email_match else "N/A"
-                
-                if email != "N/A":
-                    results.append({
-                        "Title": title,
-                        "Author": name,
-                        "Email": email.lower(), # Save in lowercase for better de-duplication
-                        "Area of Interest": interest,
-                        "Affiliation": affiliation_text
-                    })
-        except Exception:
-            continue
-    return results
+                    affil_text = affils[0].get('Affiliation', '')
+                    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', affil_text)
+                    if email_match:
+                        new_leads.append({
+                            "Title": title,
+                            "Author": f"{author.get('ForeName', '')} {author.get('LastName', '')}",
+                            "Email": email_match.group(0).lower(),
+                            "Affiliation": affil_text
+                        })
+        except: continue
+
+    # 4. Save and De-duplicate
+    df_new = pd.DataFrame(new_leads)
+    if os.path.exists("leads.csv"):
+        df_old = pd.read_csv("leads.csv")
+        df_final = pd.concat([df_old, df_new]).drop_duplicates(subset=['Email'])
+    else:
+        df_final = df_new
+    
+    df_final.to_csv("leads.csv", index=False)
+
+    # 5. Update Checkpoint
+    next_index = start_index + 500
+    with open("checkpoint.txt", "w") as f:
+        f.write(str(next_index))
+
+    print(f"Batch complete. Total leads collected: {len(df_final)}. Progress: {next_index}/{total_results}")
+    
+    # Return True if there are still more results to get
+    return next_index < total_results
 
 if __name__ == "__main__":
-    user_query = '("immuno-oncology" OR "tumor immunology" OR "cancer immunotherapy" OR "T-cell killing" OR "NK cell" OR "CAR-T" OR "cytotoxicity") AND ("in vitro" OR "cell culture" OR "monolayer" OR "2D" OR "3D" OR "co-culture" OR "organoid" OR "spheroid")'
-    
-    # 1. Fetch new data
-    new_data = fetch_data(user_query)
-    new_df = pd.DataFrame(new_data)
-
-    # 2. De-duplication Logic
-    if os.path.exists("leads.csv"):
-        # Load existing leads
-        existing_df = pd.read_csv("leads.csv")
-        # Combine new and old data
-        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-        # Remove duplicates based on the Email column, keeping the first instance
-        final_df = combined_df.drop_duplicates(subset=['Email'], keep='first')
-    else:
-        final_df = new_df
-
-    # 3. Save the clean list
-    final_df.to_csv("leads.csv", index=False)
-    print(f"leads.csv updated. Total unique contacts: {len(final_df)}")
+    run_scraper()
