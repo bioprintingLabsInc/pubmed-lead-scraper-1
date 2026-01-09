@@ -2,8 +2,12 @@ name: PubMed Continuous Scraper
 
 on:
   workflow_dispatch:
+    inputs:
+      search_query:
+        description: 'PubMed Search Query'
+        required: false
   schedule:
-    - cron: '*/10 * * * *' # Automatically runs every 10 minutes
+    - cron: '*/10 * * * *'
 
 jobs:
   scrape:
@@ -23,34 +27,28 @@ jobs:
         run: pip install biopython
 
       - name: Run Scraper
-        id: run_scraper
         run: |
-          python scraper.py > output.log
-          cat output.log
-          if grep -q "FINISHED" output.log; then
-            echo "completed=true" >> $GITHUB_OUTPUT
-          else
-            echo "completed=false" >> $GITHUB_OUTPUT
+          # If search bar input exists, update last_query.txt
+          QUERY="${{ github.event.inputs.search_query }}"
+          if [ ! -z "$QUERY" ]; then
+            echo "$QUERY" > last_query.txt
+            # Reset checkpoint if a brand new search is started
+            echo "0" > checkpoint.txt
+            rm -f leads.csv
           fi
+          python scraper.py
 
-      - name: Update Lead Count in README
-        if: success()
+      - name: Update README Dashboard
         run: |
           if [ -f leads.csv ]; then
             COUNT=$(($(wc -l < leads.csv) - 1))
-            # Create or update the 'Total Unique Leads' line
-            if grep -q "Total Unique Leads:" README.md; then
-              sed -i "s/^Total Unique Leads: .*/Total Unique Leads: $COUNT/" README.md
-            else
-              echo -e "Total Unique Leads: $COUNT\n\n$(cat README.md)" > README.md
-            fi
+            sed -i "s/\*\*Total Unique Leads:\*\* [0-9]*/\*\*Total Unique Leads:\*\* $COUNT/" README.md
           fi
 
-      - name: Commit and Push Changes
-        if: success()
+      - name: Commit and Push
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          git commit -m "Update leads, checkpoint, and README [skip ci]" || exit 0
+          git commit -m "Update Leads and Dashboard [skip ci]" || exit 0
           git push
