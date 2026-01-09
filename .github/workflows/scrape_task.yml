@@ -1,42 +1,44 @@
-name: Run PubMed Scraper Daily
+name: PubMed Continuous Scraper # This fixes your sidebar name
 
 on:
-  schedule:
-    - cron: '0 0 * * *' # Runs automatically at midnight every day
-  workflow_dispatch: # Allows you to run it manually with a button
+  workflow_dispatch:
+    inputs:
+      keyword:
+        description: 'Enter PubMed Search Keyword'
+        required: true
+        default: '("immuno-oncology" OR "tumor immunology")'
+  repository_dispatch:
+    types: [next_batch]
 
 jobs:
-  build:
+  scrape:
     runs-on: ubuntu-latest
-    
-    # This section gives the script permission to write the CSV file to your repo
     permissions:
       contents: write
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+      - run: pip install biopython pandas
 
-      - name: Install dependencies
-        run: |
-          pip install biopython pandas
-
-      - name: Run script
-        # This is the critical environment variable section
+      - name: Run Scraper
         env:
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
+          SEARCH_KEYWORD: ${{ github.event.inputs.keyword || github.event.client_payload.keyword }}
         run: python scraper.py
 
-      - name: Save CSV back to GitHub
+      - name: Save Data
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add leads.csv
-          # This avoids an error if no new leads were found
-          git commit -m "Auto-update leads" || exit 0
+          git add .
+          git commit -m "Updated leads" || exit 0
           git push
+
+      - name: Loop Next Batch
+        run: |
+          curl -X POST -H "Authorization: token ${{ secrets.MY_GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/${{ github.repository }}/actions/workflows/scrape_task.yml/dispatches \
+          -d '{"ref":"main", "inputs": {"keyword": "${{ github.event.inputs.keyword || github.event.client_payload.keyword }}"}}'
