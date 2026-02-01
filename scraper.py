@@ -4,7 +4,7 @@ from Bio import Entrez
 from datetime import datetime
 
 # --- CONFIGURATION ---
-Entrez.email = "manavvanga@gmail.com" 
+Entrez.email = "bioprintinglabsinc@gmail.com" 
 OUTPUT_FILE = "leads.csv"
 QUERY_FILE = "last_query.txt"
 CHECKPOINT_FILE = "checkpoint.txt"  # Tracks progress within a single year
