@@ -4,11 +4,14 @@ from Bio import Entrez
 from datetime import datetime
 
 # --- CONFIGURATION ---
+# This pulls your key from GitHub Secrets automatically
+Entrez.api_key = os.getenv("9b0e36e78e8e9986b0e8db650ddeecdb6f09") 
 Entrez.email = "bioprintinglabsinc@gmail.com" 
+
 OUTPUT_FILE = "leads.csv"
 QUERY_FILE = "last_query.txt"
-CHECKPOINT_FILE = "checkpoint.txt"  # Tracks progress within a single year
-YEAR_CHECKPOINT = "year_checkpoint.txt" # Tracks which year we are in
+CHECKPOINT_FILE = "checkpoint.txt" 
+YEAR_CHECKPOINT = "year_checkpoint.txt" 
 BATCH_SIZE = 500
 
 def get_year_checkpoint():
@@ -27,7 +30,7 @@ def get_batch_checkpoint():
     return 0
 
 def load_existing_emails():
-    """CRITICAL: Loads current leads to prevent any double entries."""
+    """Prevents duplicates across the entire database."""
     emails = set()
     if os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE, "r", encoding='utf-8') as f:
@@ -54,13 +57,17 @@ def scrape():
     batch_start = get_batch_checkpoint()
     existing_emails = load_existing_emails()
 
-    # Create a year-specific query to bypass the 9,999 limit
+    # Create a year-specific query
     year_query = f"({base_query}) AND {current_year}[dp]"
+    
+    # Check if API Key is working
+    if Entrez.api_key:
+        print("Using NCBI API Key for high-speed scraping.")
     
     search_handle = Entrez.esearch(db="pubmed", term=year_query, retmax=0)
     total_for_year = int(Entrez.read(search_handle)["Count"])
     
-    print(f"--- Year: {current_year} | Total for Year: {total_for_year} | Existing Leads: {len(existing_emails)} ---")
+    print(f"--- Year: {current_year} | Total for Year: {total_for_year} | Database Size: {len(existing_emails)} ---")
 
     # If the current year's results are exhausted, move to the previous year
     if batch_start >= total_for_year or batch_start >= 9999:
@@ -69,7 +76,7 @@ def scrape():
         with open(CHECKPOINT_FILE, "w") as f: f.write("0")
         return 
 
-    # Fetch IDs for the current batch
+    # Fetch IDs
     fetch_handle = Entrez.esearch(db="pubmed", term=year_query, retstart=batch_start, retmax=BATCH_SIZE)
     id_list = Entrez.read(fetch_handle)["IdList"]
 
@@ -92,12 +99,13 @@ def scrape():
                 for aff in author.get('AffiliationInfo', []):
                     aff_text = aff.get('Affiliation', '')
                     if "@" in aff_text:
+                        # Extract email using a simple split
                         email = [w for w in aff_text.split() if "@" in w][0].strip('.,').lower().strip()
                         name = f"{author.get('ForeName', '')} {author.get('LastName', '')}"
                         
-                        # Only add if it's NOT in our existing 7,723 leads
+                        # Anti-Duplicate Check
                         if email not in existing_emails and email not in batch_emails:
-                            new_leads.append([title, name, email, f"Immuno-Oncology ({current_year})"])
+                            new_leads.append([title, name, email, f"Bioprinting ({current_year})"])
                             batch_emails.add(email)
                         break
         except: continue
@@ -114,7 +122,7 @@ def scrape():
     with open(CHECKPOINT_FILE, "w") as f:
         f.write(str(batch_start + BATCH_SIZE))
     
-    print(f"Added {len(new_leads)} unique leads. Next batch: {batch_start + BATCH_SIZE}")
+    print(f"Added {len(new_leads)} unique leads. Progress for {current_year}: {batch_start + BATCH_SIZE}")
 
 if __name__ == "__main__":
     scrape()
