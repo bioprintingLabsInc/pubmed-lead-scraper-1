@@ -3,7 +3,8 @@ import csv
 from Bio import Entrez
 
 # --- CONFIGURATION ---
-Entrez.api_key = os.getenv("9b0e36e78e8e9986b0e8db650ddeecdb6f09") 
+# This line now correctly pulls your secret from the GitHub environment
+Entrez.api_key = os.getenv("NCBI_API_KEY") 
 Entrez.email = "bioprintinglabsinc@gmail.com" 
 
 OUTPUT_FILE = "leads.csv"
