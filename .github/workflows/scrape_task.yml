@@ -28,18 +28,16 @@ jobs:
           python-version: '3.9'
 
       - name: Install Dependencies
-        run: pip install biopython pandas # Added pandas here since you mentioned it earlier
+        run: pip install biopython pandas
 
       - name: Run Scraper
         env:
           INPUT_QUERY: ${{ github.event.inputs.search_query }}
-          NCBI_API_KEY: ${{ 9b0e36e78e8e9986b0e8db650ddeecdb6f09 }}  # <--- CHANGE 1: ADD THIS LINE
+          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}  # Reference the secret, not the key!
         run: |
           if [ ! -z "$INPUT_QUERY" ]; then
             echo "$INPUT_QUERY" > last_query.txt
             echo "0" > checkpoint.txt
-            # CHANGE 2: Don't remove leads.csv here, or you lose the "Anti-Duplicate" memory
-            # Just empty it once manually on GitHub instead.
           fi
           python scraper.py > output.log
           cat output.log
@@ -52,7 +50,6 @@ jobs:
       - name: Update README Dashboard
         run: |
           if [ -f leads.csv ]; then
-            # CHANGE 3: Fixed the counting logic to be more robust
             COUNT=$(grep -c "@" leads.csv || echo 0) 
             sed -i "s/\*\*Total Unique Leads:\*\* [0-9]*/\*\*Total Unique Leads:\*\* $COUNT/" README.md
           fi
@@ -75,5 +72,5 @@ jobs:
         if: env.STATUS == 'CONTINUE'
         uses: peter-evans/repository-dispatch@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }} # This uses the built-in GitHub secret
+          token: ${{ secrets.GITHUB_TOKEN }}
           event-type: next_batch
