@@ -1,0 +1,13 @@
+name: "🚀 Start New PubMed Search"
+description: "Enter keywords to restart the lead generation machine."
+title: "[SEARCH]: New keywords"
+labels: ["scraper-trigger"]
+body:
+  - type: textarea
+    id: keywords
+    attributes:
+      label: "PubMed Keywords"
+      description: "Paste your Boolean query here (e.g., 'organoid AND 2026')."
+      placeholder: "(organoid OR microbiology OR MPS OR NAMS)"
+    validations:
+      required: true
