@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       search_query:
-        description: 'Live Search Keywords'
+        description: 'Manual Search Keywords'
         required: false
   repository_dispatch:
     types: [next_batch]
@@ -25,7 +25,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Process Live Trigger
+      - name: Process Trigger
         if: github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'scraper-trigger')
         run: |
           QUERY=$(echo "${{ github.event.issue.body }}" | grep -A 1 "### PubMed Keywords" | tail -n 1)
@@ -47,8 +47,8 @@ jobs:
           fi
           pip install biopython pandas
           python scraper.py
-          
-      - name: Dashboard Sync
+
+      - name: Sync Dashboard & Push
         run: |
           COUNT=$(grep -c "@" leads.csv || echo 0)
           sed -i "s/Total Unique Leads: [0-9]*/Total Unique Leads: $COUNT/" README.md
@@ -56,10 +56,10 @@ jobs:
           git config --local user.name "GitHub Action"
           git pull --rebase origin main
           git add .
-          git commit -m "Live Update: $COUNT leads collected [skip ci]" || exit 0
+          git commit -m "Live Update: $COUNT leads [skip ci]" || exit 0
           git push origin main
 
-      - name: Chain Reaction (Auto-Trigger)
+      - name: Auto-Trigger Next Batch
         if: env.STATUS != 'DONE'
         uses: peter-evans/repository-dispatch@v2
         with:
