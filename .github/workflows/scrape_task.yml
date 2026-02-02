@@ -28,16 +28,18 @@ jobs:
           python-version: '3.9'
 
       - name: Install Dependencies
-        run: pip install biopython
+        run: pip install biopython pandas # Added pandas here since you mentioned it earlier
 
       - name: Run Scraper
         env:
           INPUT_QUERY: ${{ github.event.inputs.search_query }}
+          NCBI_API_KEY: ${{ 9b0e36e78e8e9986b0e8db650ddeecdb6f09 }}  # <--- CHANGE 1: ADD THIS LINE
         run: |
           if [ ! -z "$INPUT_QUERY" ]; then
             echo "$INPUT_QUERY" > last_query.txt
             echo "0" > checkpoint.txt
-            rm -f leads.csv
+            # CHANGE 2: Don't remove leads.csv here, or you lose the "Anti-Duplicate" memory
+            # Just empty it once manually on GitHub instead.
           fi
           python scraper.py > output.log
           cat output.log
@@ -50,7 +52,8 @@ jobs:
       - name: Update README Dashboard
         run: |
           if [ -f leads.csv ]; then
-            COUNT=$(($(wc -l < leads.csv) - 1))
+            # CHANGE 3: Fixed the counting logic to be more robust
+            COUNT=$(grep -c "@" leads.csv || echo 0) 
             sed -i "s/\*\*Total Unique Leads:\*\* [0-9]*/\*\*Total Unique Leads:\*\* $COUNT/" README.md
           fi
 
@@ -60,23 +63,17 @@ jobs:
           git config --local user.name "GitHub Action"
           git add .
           
-          # 1. Hide new changes temporarily
           git stash
-          
-          # 2. Pull latest from server
           git pull --rebase origin main
-          
-          # 3. Bring back your new leads
           git stash pop || echo "No local changes to re-apply"
           
-          # 4. Finalize commit and push
           git add .
           git commit -m "Update Leads and Checkpoint [skip ci]" || exit 0
           git push
-
+          
       - name: Auto-Trigger Next Batch
         if: env.STATUS == 'CONTINUE'
         uses: peter-evans/repository-dispatch@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }} # This uses the built-in GitHub secret
           event-type: next_batch
