@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       search_query:
-        description: 'Manual Trigger Query'
+        description: 'Live Search Keywords'
         required: false
   repository_dispatch:
     types: [next_batch]
@@ -25,46 +25,42 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Extract Query from Issue
+      - name: Process Live Trigger
         if: github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'scraper-trigger')
         run: |
-          # Grabs keywords from the Issue Form
           QUERY=$(echo "${{ github.event.issue.body }}" | grep -A 1 "### PubMed Keywords" | tail -n 1)
           echo "FINAL_QUERY=$QUERY" >> $GITHUB_ENV
-          # Close the issue automatically
-          gh issue close ${{ github.event.issue.number }} --comment "Scraper launched with: $QUERY"
+          gh issue close ${{ github.event.issue.number }} --comment "LIVE RUN STARTED: $QUERY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run Scraper
+      - name: Run Engine
         env:
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
-          # Logic to pick manual box, issue form, or existing file
           QUERY_TO_USE: ${{ env.FINAL_QUERY || github.event.inputs.search_query }}
         run: |
           if [[ -n "$QUERY_TO_USE" ]]; then
             echo "$QUERY_TO_USE" > last_query.txt
             echo "0" > checkpoint.txt
             echo "2026" > year_checkpoint.txt
+            echo "Title,Author Name,Email" > leads.csv
           fi
           pip install biopython pandas
-          python scraper.py > output.log
-          cat output.log
-          if grep -q "FINISHED" output.log; then echo "STATUS=DONE" >> $GITHUB_ENV; else echo "STATUS=CONTINUE" >> $GITHUB_ENV; fi
-
-      - name: Update Dashboard & Push
+          python scraper.py
+          
+      - name: Dashboard Sync
         run: |
           COUNT=$(grep -c "@" leads.csv || echo 0)
           sed -i "s/Total Unique Leads: [0-9]*/Total Unique Leads: $COUNT/" README.md
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git pull --rebase origin main
-          git add README.md leads.csv last_query.txt checkpoint.txt year_checkpoint.txt
-          git commit -m "Dashboard: $COUNT leads [skip ci]" || exit 0
+          git add .
+          git commit -m "Live Update: $COUNT leads collected [skip ci]" || exit 0
           git push origin main
 
-      - name: Auto-Trigger Next Batch
-        if: env.STATUS == 'CONTINUE'
+      - name: Chain Reaction (Auto-Trigger)
+        if: env.STATUS != 'DONE'
         uses: peter-evans/repository-dispatch@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
