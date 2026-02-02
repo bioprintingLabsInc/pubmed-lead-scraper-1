@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # Get full history to avoid push errors
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -33,13 +35,19 @@ jobs:
           INPUT_QUERY: ${{ github.event.inputs.search_query }}
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
         run: |
-          if [ ! -z "$INPUT_QUERY" ]; then
+          # Use "if" to check if the input box was actually filled
+          if [[ -n "$INPUT_QUERY" ]]; then
+            echo "New query detected: $INPUT_QUERY"
             echo "$INPUT_QUERY" > last_query.txt
             echo "0" > checkpoint.txt
             echo "2026" > year_checkpoint.txt
+          else
+            echo "Using existing query from last_query.txt"
           fi
+          
           python scraper.py > output.log
           cat output.log
+          
           if grep -q "FINISHED" output.log; then
             echo "STATUS=DONE" >> $GITHUB_ENV
           else
@@ -50,9 +58,15 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add .
+          
+          # Force synchronization with the server
+          git pull --rebase origin main
+          
+          # Explicitly add the tracking files
+          git add last_query.txt checkpoint.txt year_checkpoint.txt leads.csv
+          
           git commit -m "Update Leads and Checkpoint [skip ci]" || exit 0
-          git push
+          git push origin main
 
       - name: Auto-Trigger Next Batch
         if: env.STATUS == 'CONTINUE'
