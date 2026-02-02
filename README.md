@@ -2,7 +2,10 @@
 
 **Total Unique Leads:** 6127
 
-### 🔍 Run New Search
-[Click here to enter new keywords and start the scraper](https://github.com/bioprintingLabsInc/pubmed-lead-scraper-1/actions/workflows/scrape_task.yml)
+### 🎮 Control Center
+[🚀 CLICK HERE TO ENTER NEW KEYWORDS](https://github.com/bioprintingLabsInc/pubmed-lead-scraper-1/issues/new?template=run_scraper.yml)
 
-> **Note:** Once you click the link, select **"Run workflow"** and paste your query in the box.
+> **Instructions:**
+> 1. Click the button above.
+> 2. Paste your PubMed query into the box.
+> 3. Submit. The machine will start and the "Total" above will update in ~2 minutes.
