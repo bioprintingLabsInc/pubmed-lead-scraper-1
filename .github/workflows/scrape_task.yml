@@ -9,7 +9,7 @@ on:
   repository_dispatch:
     types: [next_batch]
   schedule:
-    - cron: '*/20 * * * *' # Backup timer
+    - cron: '*/20 * * * *' 
 
 jobs:
   scrape:
@@ -19,8 +19,6 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0 
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -33,11 +31,12 @@ jobs:
       - name: Run Scraper
         env:
           INPUT_QUERY: ${{ github.event.inputs.search_query }}
-          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}  # This pulls from GitHub Secrets
+          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
         run: |
           if [ ! -z "$INPUT_QUERY" ]; then
             echo "$INPUT_QUERY" > last_query.txt
             echo "0" > checkpoint.txt
+            echo "2026" > year_checkpoint.txt
           fi
           python scraper.py > output.log
           cat output.log
@@ -47,27 +46,14 @@ jobs:
             echo "STATUS=CONTINUE" >> $GITHUB_ENV
           fi
 
-      - name: Update README Dashboard
-        run: |
-          if [ -f leads.csv ]; then
-            COUNT=$(grep -c "@" leads.csv || echo 0) 
-            sed -i "s/\*\*Total Unique Leads:\*\* [0-9]*/\*\*Total Unique Leads:\*\* $COUNT/" README.md
-          fi
-
-      - name: Commit and Push (Conflict Protection)
+      - name: Commit and Push
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          
-          git stash
-          git pull --rebase origin main
-          git stash pop || echo "No local changes to re-apply"
-          
-          git add .
           git commit -m "Update Leads and Checkpoint [skip ci]" || exit 0
           git push
-          
+
       - name: Auto-Trigger Next Batch
         if: env.STATUS == 'CONTINUE'
         uses: peter-evans/repository-dispatch@v2
