@@ -33,7 +33,7 @@ jobs:
       - name: Run Scraper
         env:
           INPUT_QUERY: ${{ github.event.inputs.search_query }}
-          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}  # Reference the secret, not the key!
+          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}  # This pulls from GitHub Secrets
         run: |
           if [ ! -z "$INPUT_QUERY" ]; then
             echo "$INPUT_QUERY" > last_query.txt
