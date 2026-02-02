@@ -1,6 +1,6 @@
 # 🧬 PubMed Lead Generation Dashboard
 
-**Total Unique Leads:** 6127
+**Total Unique Leads:** 0
 
 ### 🎮 Control Center
 [🚀 CLICK HERE TO ENTER NEW KEYWORDS](https://github.com/bioprintingLabsInc/pubmed-lead-scraper-1/issues/new?template=run_scraper.yml)
