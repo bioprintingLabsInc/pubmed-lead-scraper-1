@@ -17,7 +17,6 @@ def scrape():
         with open("checkpoint.txt", "r") as f: start = int(f.read().strip())
     except: start = 0
 
-    # Stop if we go too far back
     if year < 2021: 
         with open("output.log", "w") as f: f.write("FINISHED")
         return
@@ -29,7 +28,6 @@ def scrape():
     total_results = int(search_results["Count"])
     id_list = search_results["IdList"]
 
-    # Handle paging/checkpoints
     if not id_list or start >= total_results:
         with open("year_checkpoint.txt", "w") as f: f.write(str(year - 1))
         with open("checkpoint.txt", "w") as f: f.write("0")
@@ -43,20 +41,32 @@ def scrape():
     for art in articles.get('PubmedArticle', []):
         try:
             med = art['MedlineCitation']['Article']
+            
+            # --- STRICT EXTRACTION: No defaults ---
+            journal = med.get('Journal', {}).get('Title')
+            pub_date = med.get('Journal', {}).get('JournalIssue', {}).get('PubDate', {})
+            pub_year = pub_date.get('Year')
+
+            # IF JOURNAL OR YEAR IS MISSING, SKIP THIS PAPER
+            if not journal or not pub_year:
+                continue
+
             title = med.get('ArticleTitle', '')
+            
             for auth in med.get('AuthorList', []):
                 for aff in auth.get('AffiliationInfo', []):
                     affiliation_text = aff['Affiliation']
                     if "@" in affiliation_text:
-                        # Extract the email address
                         email = [w for w in affiliation_text.split() if "@" in w][0].strip('.,').lower()
                         
-                        # SAVE: Title, Name, Email, and the full Affiliation (for Institution)
+                        # SAVE: Title, Name, Email, Institution, Journal, Year
                         new_data.append([
                             title, 
                             f"{auth.get('ForeName','')} {auth.get('LastName','')}", 
                             email, 
-                            affiliation_text
+                            affiliation_text,
+                            journal,
+                            pub_year
                         ])
                         break
         except: continue
@@ -66,10 +76,9 @@ def scrape():
     with open("leads.csv", "a", newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["Title", "Author Name", "Email", "Institution"])
+            writer.writerow(["Title", "Author Name", "Email", "Institution", "Journal", "Year"])
         writer.writerows(new_data)
 
-    # Update checkpoint for next run
     with open("checkpoint.txt", "w") as f: f.write(str(start + 500))
 
 if __name__ == "__main__":
