@@ -9,7 +9,8 @@ on:
         description: 'Manual Search Keywords'
         required: false
   repository_dispatch:
-    types: [next_batch]
+    # UPDATED: Added 'manual_trigger_from_sheet' to hear the Google Sheet
+    types: [manual_trigger_from_sheet, next_batch] 
   schedule:
     - cron: '*/20 * * * *' 
 
@@ -30,20 +31,21 @@ jobs:
         run: |
           QUERY=$(echo "${{ github.event.issue.body }}" | grep -A 1 "### PubMed Keywords" | tail -n 1)
           echo "FINAL_QUERY=$QUERY" >> $GITHUB_ENV
-          gh issue close ${{ github.event.issue.number }} --comment "LIVE RUN STARTED: $QUERY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Engine
         env:
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
-          QUERY_TO_USE: ${{ env.FINAL_QUERY || github.event.inputs.search_query }}
+          # UPDATED: This now looks for the 'query' payload sent from your Google Sheet B8 cell
+          QUERY_TO_USE: ${{ env.FINAL_QUERY || github.event.inputs.search_query || github.event.client_payload.query }}
         run: |
           if [[ -n "$QUERY_TO_USE" ]]; then
             echo "$QUERY_TO_USE" > last_query.txt
             echo "0" > checkpoint.txt
             echo "2026" > year_checkpoint.txt
-            echo "Title,Author Name,Email" > leads.csv
+            # Ensure headers match your Google Sheet Sync logic
+            echo "Title,Author Name,Email,Institution,Journal,Year" > leads.csv
           fi
           pip install biopython pandas
           python scraper.py
@@ -56,7 +58,7 @@ jobs:
           git config --local user.name "GitHub Action"
           git pull --rebase origin main
           git add .
-          git commit -m "Live Update: $COUNT leads [skip ci]" || exit 0
+          git commit -m "Live Update from Sheet Search: $COUNT leads [skip ci]" || exit 0
           git push origin main
 
       - name: Auto-Trigger Next Batch
