@@ -1,68 +1,57 @@
-name: PubMed Continuous Scraper
+name: PubMed Deep-Dive Scraper
 
 on:
-  issues:
-    types: [opened]
-  workflow_dispatch:
-    inputs:
-      search_query:
-        description: 'Manual Search Keywords'
-        required: false
   repository_dispatch:
-    # UPDATED: Added 'manual_trigger_from_sheet' to hear the Google Sheet
+    # Only wakes up when the Google Sheet "Trial Run" sends the signal
     types: [manual_trigger_from_sheet, next_batch] 
-  schedule:
-    - cron: '*/20 * * * *' 
+  workflow_dispatch:
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      issues: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      - name: Process Trigger
-        if: github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'scraper-trigger')
-        run: |
-          QUERY=$(echo "${{ github.event.issue.body }}" | grep -A 1 "### PubMed Keywords" | tail -n 1)
-          echo "FINAL_QUERY=$QUERY" >> $GITHUB_ENV
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Engine
         env:
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
-          # UPDATED: This now looks for the 'query' payload sent from your Google Sheet B8 cell
-          QUERY_TO_USE: ${{ env.FINAL_QUERY || github.event.inputs.search_query || github.event.client_payload.query }}
+          # Captures the keyword from your Google Sheet B8 cell
+          QUERY_TO_USE: ${{ github.event.client_payload.query }}
         run: |
+          # If a new query arrives from the Sheet, reset the search to 2026
           if [[ -n "$QUERY_TO_USE" ]]; then
             echo "$QUERY_TO_USE" > last_query.txt
             echo "0" > checkpoint.txt
             echo "2026" > year_checkpoint.txt
-            # Ensure headers match your Google Sheet Sync logic
             echo "Title,Author Name,Email,Institution,Journal,Year" > leads.csv
           fi
+          
           pip install biopython pandas
           python scraper.py
 
-      - name: Sync Dashboard & Push
+      - name: Save & Push Progress
         run: |
-          COUNT=$(grep -c "@" leads.csv || echo 0)
-          sed -i "s/Total Unique Leads: [0-9]*/Total Unique Leads: $COUNT/" README.md
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git pull --rebase origin main
           git add .
-          git commit -m "Live Update from Sheet Search: $COUNT leads [skip ci]" || exit 0
+          git commit -m "Progress Update: $(cat year_checkpoint.txt) [skip ci]" || exit 0
           git push origin main
 
-      - name: Auto-Trigger Next Batch
-        if: env.STATUS != 'DONE'
+      - name: Batching Logic (Stop at 2020)
+        run: |
+          CURRENT_YEAR=$(cat year_checkpoint.txt)
+          # Stop condition: If we drop below 2020, we don't trigger the next batch
+          if [ "$CURRENT_YEAR" -lt 2020 ]; then
+            echo "MISSION_COMPLETE=true" >> $GITHUB_ENV
+          else
+            echo "MISSION_COMPLETE=false" >> $GITHUB_ENV
+          fi
+
+      - name: Trigger Next Batch
+        if: env.MISSION_COMPLETE == 'false'
         uses: peter-evans/repository-dispatch@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
