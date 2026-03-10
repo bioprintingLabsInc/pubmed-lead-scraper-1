@@ -17,12 +17,12 @@ jobs:
       - name: Run Engine
         env:
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
-          # Captures keywords AND the year range from Google Sheet
+          GOOGLE_WEBAPP_URL: ${{ secrets.GOOGLE_WEBAPP_URL }} # ADDED THIS
           QUERY_TO_USE: ${{ github.event.client_payload.query }}
           START_YEAR: ${{ github.event.client_payload.start_year }}
           END_YEAR: ${{ github.event.client_payload.end_year }}
         run: |
-          # If a new command arrives from the Sheet, set the custom range
+          # If a new command arrives from the Sheet, initialize files
           if [[ -n "$QUERY_TO_USE" ]]; then
             echo "$QUERY_TO_USE" > last_query.txt
             echo "0" > checkpoint.txt
@@ -31,7 +31,7 @@ jobs:
             echo "Title,Author Name,Email,Institution,Journal,Year" > leads.csv
           fi
           
-          pip install biopython pandas
+          pip install -r requirements.txt
           python scraper.py
 
       - name: Save & Push Progress
@@ -39,14 +39,13 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          git commit -m "Progress: $(cat year_checkpoint.txt) [skip ci]" || exit 0
+          git commit -m "Progress Update [skip ci]" || exit 0
           git push origin main
 
       - name: Dynamic Batching Logic
         run: |
           CURRENT_YEAR=$(cat year_checkpoint.txt)
           LIMIT_YEAR=$(cat start_year_limit.txt)
-          # Stop only when we drop below the START_YEAR you set in the Sheet
           if [ "$CURRENT_YEAR" -lt "$LIMIT_YEAR" ]; then
             echo "MISSION_COMPLETE=true" >> $GITHUB_ENV
           else
