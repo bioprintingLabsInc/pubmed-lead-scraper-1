@@ -1,8 +1,7 @@
-name: PubMed Deep-Dive Scraper
+name: PubMed Dynamic-Range Scraper
 
 on:
   repository_dispatch:
-    # Only wakes up when the Google Sheet "Trial Run" sends the signal
     types: [manual_trigger_from_sheet, next_batch] 
   workflow_dispatch:
 
@@ -18,14 +17,17 @@ jobs:
       - name: Run Engine
         env:
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
-          # Captures the keyword from your Google Sheet B8 cell
+          # Captures keywords AND the year range from Google Sheet
           QUERY_TO_USE: ${{ github.event.client_payload.query }}
+          START_YEAR: ${{ github.event.client_payload.start_year }}
+          END_YEAR: ${{ github.event.client_payload.end_year }}
         run: |
-          # If a new query arrives from the Sheet, reset the search to 2026
+          # If a new command arrives from the Sheet, set the custom range
           if [[ -n "$QUERY_TO_USE" ]]; then
             echo "$QUERY_TO_USE" > last_query.txt
             echo "0" > checkpoint.txt
-            echo "2026" > year_checkpoint.txt
+            echo "$END_YEAR" > year_checkpoint.txt
+            echo "$START_YEAR" > start_year_limit.txt
             echo "Title,Author Name,Email,Institution,Journal,Year" > leads.csv
           fi
           
@@ -37,14 +39,15 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          git commit -m "Progress Update: $(cat year_checkpoint.txt) [skip ci]" || exit 0
+          git commit -m "Progress: $(cat year_checkpoint.txt) [skip ci]" || exit 0
           git push origin main
 
-      - name: Batching Logic (Stop at 2020)
+      - name: Dynamic Batching Logic
         run: |
           CURRENT_YEAR=$(cat year_checkpoint.txt)
-          # Stop condition: If we drop below 2020, we don't trigger the next batch
-          if [ "$CURRENT_YEAR" -lt 2020 ]; then
+          LIMIT_YEAR=$(cat start_year_limit.txt)
+          # Stop only when we drop below the START_YEAR you set in the Sheet
+          if [ "$CURRENT_YEAR" -lt "$LIMIT_YEAR" ]; then
             echo "MISSION_COMPLETE=true" >> $GITHUB_ENV
           else
             echo "MISSION_COMPLETE=false" >> $GITHUB_ENV
