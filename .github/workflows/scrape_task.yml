@@ -1,66 +1,33 @@
-name: PubMed Dynamic-Range Scraper
-
+name: BPL Fortress Sync
 on:
   repository_dispatch:
-    types: [manual_trigger_from_sheet, next_batch] 
+    types: [manual_trigger_from_sheet]
   workflow_dispatch:
 
 jobs:
-  scrape:
+  run-hunt:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    permissions: {contents: write}
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
-      - name: Run Engine
+      - uses: actions/checkout@v3
+      - name: Setup & Scrape
         env:
-          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
-          GOOGLE_WEBAPP_URL: ${{ secrets.GOOGLE_WEBAPP_URL }}
-          QUERY_TO_USE: ${{ github.event.client_payload.query }}
-          START_YEAR: ${{ github.event.client_payload.start_year }}
-          END_YEAR: ${{ github.event.client_payload.end_year }}
+          QUERY: ${{ github.event.client_payload.query }}
+          START: ${{ github.event.client_payload.start_year }}
+          END: ${{ github.event.client_payload.end_year }}
         run: |
-          # 1. INITIALIZATION: If a command came from the Sheet, create/overwrite files
-          if [[ -n "$QUERY_TO_USE" ]]; then
-            echo "$QUERY_TO_USE" > last_query.txt
-            echo "$START_YEAR" > start_year_limit.txt
-            echo "$END_YEAR" > year_checkpoint.txt
-            echo "Title,Author Name,Email,Institution,Journal,Year" > leads.csv
+          # Write incoming parameters to memory files
+          if [[ -n "$QUERY" ]]; then
+            echo "$QUERY" > last_query.txt
+            echo "$START" > start_year_limit.txt
+            echo "$END" > year_checkpoint.txt
           fi
-
-          # 2. SAFETY CHECK: If files still don't exist (e.g. manual run), create defaults
-          if [ ! -f last_query.txt ]; then echo "Organoid" > last_query.txt; fi
-          if [ ! -f start_year_limit.txt ]; then echo "2020" > start_year_limit.txt; fi
-          if [ ! -f year_checkpoint.txt ]; then echo "2026" > year_checkpoint.txt; fi
-          
           pip install -r requirements.txt
           python scraper.py
-
-      - name: Save & Push Progress
+      - name: Commit Leads & Checkpoint
         run: |
           git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add .
-          git commit -m "Progress Update [skip ci]" || exit 0
+          git config --local user.name "BPL_Bot"
+          git add leads.csv last_query.txt year_checkpoint.txt start_year_limit.txt
+          git commit -m "BPL Data Update: $(cat year_checkpoint.txt) [skip ci]" || exit 0
           git push origin main
-
-      - name: Dynamic Batching Logic
-        run: |
-          # FIX: Read safely. If file is missing, set a stop value.
-          CURRENT_YEAR=$(cat year_checkpoint.txt || echo "1900")
-          LIMIT_YEAR=$(cat start_year_limit.txt || echo "2000")
-          
-          if [ "$CURRENT_YEAR" -lt "$LIMIT_YEAR" ]; then
-            echo "MISSION_COMPLETE=true" >> $GITHUB_ENV
-          else
-            echo "MISSION_COMPLETE=false" >> $GITHUB_ENV
-          fi
-
-      - name: Trigger Next Batch
-        if: env.MISSION_COMPLETE == 'false'
-        uses: peter-evans/repository-dispatch@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          event-type: next_batch
