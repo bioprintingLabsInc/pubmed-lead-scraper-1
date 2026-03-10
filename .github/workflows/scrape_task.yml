@@ -17,19 +17,23 @@ jobs:
       - name: Run Engine
         env:
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
-          GOOGLE_WEBAPP_URL: ${{ secrets.GOOGLE_WEBAPP_URL }} # ADDED THIS
+          GOOGLE_WEBAPP_URL: ${{ secrets.GOOGLE_WEBAPP_URL }}
           QUERY_TO_USE: ${{ github.event.client_payload.query }}
           START_YEAR: ${{ github.event.client_payload.start_year }}
           END_YEAR: ${{ github.event.client_payload.end_year }}
         run: |
-          # If a new command arrives from the Sheet, initialize files
+          # 1. INITIALIZATION: If a command came from the Sheet, create/overwrite files
           if [[ -n "$QUERY_TO_USE" ]]; then
             echo "$QUERY_TO_USE" > last_query.txt
-            echo "0" > checkpoint.txt
-            echo "$END_YEAR" > year_checkpoint.txt
             echo "$START_YEAR" > start_year_limit.txt
+            echo "$END_YEAR" > year_checkpoint.txt
             echo "Title,Author Name,Email,Institution,Journal,Year" > leads.csv
           fi
+
+          # 2. SAFETY CHECK: If files still don't exist (e.g. manual run), create defaults
+          if [ ! -f last_query.txt ]; then echo "Organoid" > last_query.txt; fi
+          if [ ! -f start_year_limit.txt ]; then echo "2020" > start_year_limit.txt; fi
+          if [ ! -f year_checkpoint.txt ]; then echo "2026" > year_checkpoint.txt; fi
           
           pip install -r requirements.txt
           python scraper.py
@@ -44,8 +48,10 @@ jobs:
 
       - name: Dynamic Batching Logic
         run: |
-          CURRENT_YEAR=$(cat year_checkpoint.txt)
-          LIMIT_YEAR=$(cat start_year_limit.txt)
+          # FIX: Read safely. If file is missing, set a stop value.
+          CURRENT_YEAR=$(cat year_checkpoint.txt || echo "1900")
+          LIMIT_YEAR=$(cat start_year_limit.txt || echo "2000")
+          
           if [ "$CURRENT_YEAR" -lt "$LIMIT_YEAR" ]; then
             echo "MISSION_COMPLETE=true" >> $GITHUB_ENV
           else
