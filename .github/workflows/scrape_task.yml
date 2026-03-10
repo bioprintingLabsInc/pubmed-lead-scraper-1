@@ -1,4 +1,4 @@
-name: BPL Fortress Sync
+name: BPL Remote Handshake
 on:
   repository_dispatch:
     types: [manual_trigger_from_sheet]
@@ -9,7 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {contents: write}
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout Code (Node 24)
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
       - name: Setup & Scrape
         env:
           QUERY: ${{ github.event.client_payload.query }}
@@ -22,12 +29,19 @@ jobs:
             echo "$START" > start_year_limit.txt
             echo "$END" > year_checkpoint.txt
           fi
+          
+          # Default fallback checks
+          if [ ! -f last_query.txt ]; then echo "Organoid" > last_query.txt; fi
+          if [ ! -f start_year_limit.txt ]; then echo "2020" > start_year_limit.txt; fi
+          if [ ! -f year_checkpoint.txt ]; then echo "2026" > year_checkpoint.txt; fi
+
           pip install -r requirements.txt
           python scraper.py
-      - name: Commit Leads & Checkpoint
+          
+      - name: Commit Checkpoints & Backup
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "BPL_Bot"
           git add leads.csv last_query.txt year_checkpoint.txt start_year_limit.txt
-          git commit -m "BPL Data Update: $(cat year_checkpoint.txt) [skip ci]" || exit 0
+          git commit -m "BPL Remote Sync: $(cat last_query.txt) [skip ci]" || exit 0
           git push origin main
