@@ -8,40 +8,40 @@ jobs:
   run-hunt:
     runs-on: ubuntu-latest
     permissions: {contents: write}
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout Code (Node 24)
-        uses: actions/checkout@v4
-      
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          
-      - name: Setup & Scrape
+
+      - name: Force Update Parameters
         env:
           QUERY: ${{ github.event.client_payload.query }}
           START: ${{ github.event.client_payload.start_year }}
           END: ${{ github.event.client_payload.end_year }}
         run: |
-          # Write incoming parameters to memory files
+          # Only update if the signal actually contains a query
           if [[ -n "$QUERY" ]]; then
+            echo "📥 New Query Detected: $QUERY"
             echo "$QUERY" > last_query.txt
             echo "$START" > start_year_limit.txt
             echo "$END" > year_checkpoint.txt
+          else
+            echo "⚠️ No new signal from Sheet. Checking for existing memory..."
           fi
-          
-          # Default fallback checks
-          if [ ! -f last_query.txt ]; then echo "Organoid" > last_query.txt; fi
-          if [ ! -f start_year_limit.txt ]; then echo "2020" > start_year_limit.txt; fi
-          if [ ! -f year_checkpoint.txt ]; then echo "2026" > year_checkpoint.txt; fi
 
+      - name: Setup & Scrape
+        run: |
           pip install -r requirements.txt
           python scraper.py
           
-      - name: Commit Checkpoints & Backup
+      - name: Commit Checkpoints
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "BPL_Bot"
-          git add leads.csv last_query.txt year_checkpoint.txt start_year_limit.txt
-          git commit -m "BPL Remote Sync: $(cat last_query.txt) [skip ci]" || exit 0
+          git add last_query.txt year_checkpoint.txt start_year_limit.txt leads.csv
+          # The [skip ci] prevents the script from triggering itself in a loop
+          git commit -m "BPL Sync: $(cat last_query.txt) [skip ci]" || exit 0
           git push origin main
