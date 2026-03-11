@@ -16,32 +16,27 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Force Update Parameters
+      - name: Sync Parameters from BPL Dashboard
         env:
           QUERY: ${{ github.event.client_payload.query }}
           START: ${{ github.event.client_payload.start_year }}
           END: ${{ github.event.client_payload.end_year }}
         run: |
-          # Only update if the signal actually contains a query
           if [[ -n "$QUERY" ]]; then
-            echo "📥 New Query Detected: $QUERY"
             echo "$QUERY" > last_query.txt
             echo "$START" > start_year_limit.txt
             echo "$END" > year_checkpoint.txt
-          else
-            echo "⚠️ No new signal from Sheet. Checking for existing memory..."
           fi
 
-      - name: Setup & Scrape
+      - name: Run Sniper
         run: |
           pip install -r requirements.txt
           python scraper.py
           
-      - name: Commit Checkpoints
+      - name: Commit State & Data Backup
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "BPL_Bot"
           git add last_query.txt year_checkpoint.txt start_year_limit.txt leads.csv
-          # The [skip ci] prevents the script from triggering itself in a loop
           git commit -m "BPL Sync: $(cat last_query.txt) [skip ci]" || exit 0
           git push origin main
