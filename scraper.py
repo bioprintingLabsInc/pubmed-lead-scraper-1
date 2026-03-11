@@ -10,7 +10,7 @@ import pandas as pd
 from Bio import Entrez
 
 # ── CONFIG ────────────────────────────────────────────────
-WEBAPP_URL = os.getenv("WEBAPP_URL", "")          # Set in GitHub Secrets
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://script.google.com/macros/s/AKfycbz9xB0KC4I0Vj9bWWrZXfkb4hTvVMCYUIj2jiJPgXeLSpkS7eS43Sg4B3zJcN2jvHvObA/exec")
 Entrez.email = "bioprintinglabsinc@gmail.com"
 Entrez.api_key = os.getenv("NCBI_API_KEY", "")
 
