@@ -1,42 +1,103 @@
-name: BPL Remote Handshake
+name: BPL Remote Handshake V2
+
 on:
   repository_dispatch:
     types: [manual_trigger_from_sheet]
   workflow_dispatch:
+    inputs:
+      query:
+        description: 'Search keyword/query'
+        required: false
+      start_year:
+        description: 'Start year'
+        required: false
+      end_year:
+        description: 'End year'
+        required: false
 
 jobs:
   run-hunt:
     runs-on: ubuntu-latest
-    permissions: {contents: write}
+    permissions:
+      contents: write
+
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # ── 1. Checkout ────────────────────────────────────────
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── 2. Python Setup ────────────────────────────────────
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      # ── 3. Sync Parameters from Sheet ─────────────────────
       - name: Sync Parameters from BPL Dashboard
         env:
-          QUERY: ${{ github.event.client_payload.query }}
-          START: ${{ github.event.client_payload.start_year }}
-          END: ${{ github.event.client_payload.end_year }}
+          QUERY:      ${{ github.event.client_payload.query      || inputs.query }}
+          START_YEAR: ${{ github.event.client_payload.start_year || inputs.start_year }}
+          END_YEAR:   ${{ github.event.client_payload.end_year   || inputs.end_year }}
         run: |
+          echo "📥 Received parameters:"
+          echo "  Query:      $QUERY"
+          echo "  Start Year: $START_YEAR"
+          echo "  End Year:   $END_YEAR"
+
           if [[ -n "$QUERY" ]]; then
-            echo "$QUERY" > last_query.txt
-            echo "$START" > start_year_limit.txt
-            echo "$END" > year_checkpoint.txt
+            echo "$QUERY"      > last_query.txt
+            echo "$START_YEAR" > start_year_limit.txt
+            echo "$END_YEAR"   > year_checkpoint.txt
+            echo "✅ Parameters written to state files."
+          else
+            echo "⚠️  No query received — using existing state files."
           fi
 
-      - name: Run Sniper
+      # ── 4. Install Dependencies ────────────────────────────
+      - name: Install Dependencies
         run: |
+          pip install --upgrade pip
           pip install -r requirements.txt
+
+      # ── 5. Run Scraper ─────────────────────────────────────
+      - name: Run BPL Sniper
+        env:
+          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
+          WEBAPP_URL:   ${{ secrets.WEBAPP_URL }}
+        run: |
           python scraper.py
-          
+
+      # ── 6. Commit State & Data Backup ─────────────────────
       - name: Commit State & Data Backup
         run: |
-          git config --local user.email "action@github.com"
+          git config --local user.email "bpl-bot@bioprintinglabs.com"
           git config --local user.name "BPL_Bot"
-          git add last_query.txt year_checkpoint.txt start_year_limit.txt leads.csv
-          git commit -m "BPL Sync: $(cat last_query.txt) [skip ci]" || exit 0
-          git push origin main
+
+          git add last_query.txt year_checkpoint.txt start_year_limit.txt system_status.txt || true
+          git add leads.csv || true
+
+          QUERY_LABEL=$(cat last_query.txt 2>/dev/null || echo "unknown")
+          YEAR_LABEL=$(cat year_checkpoint.txt 2>/dev/null || echo "unknown")
+          STATUS_LABEL=$(cat system_status.txt 2>/dev/null || echo "unknown")
+
+          git commit -m "BPL Sync [$QUERY_LABEL | yr:$YEAR_LABEL | $STATUS_LABEL] [skip ci]" || echo "Nothing to commit."
+          git push origin main || echo "Nothing to push."
+
+      # ── 7. Notify Sheet of Final Status ───────────────────
+      - name: Notify Sheet — Final Status
+        if: always()
+        env:
+          WEBAPP_URL: ${{ secrets.WEBAPP_URL }}
+        run: |
+          STATUS=$(cat system_status.txt 2>/dev/null || echo "UNKNOWN")
+          if [[ -n "$WEBAPP_URL" ]]; then
+            curl -s -X POST "$WEBAPP_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"action\": \"updateStatus\", \"status\": \"$STATUS\"}" \
+              || echo "Status ping failed (non-fatal)."
+          fi
