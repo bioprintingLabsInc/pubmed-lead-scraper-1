@@ -1,234 +1,382 @@
 """
 =============================================================
-BPL SNIPER V2000 — Full Rebuild
-PubMed Lead Scraper with Abstract-Based Category Detection
+BPL SNIPER V2000 — Sheet-Driven Keywords Edition
+3D Cell Culture Platform Lead Scraper
+Wet lab researchers only — reviews excluded at API level
+All keywords come from Google Sheet (JSON files)
 =============================================================
 """
 
-import os, requests, datetime, re, time
+import os, re, time, datetime, json
+import requests
 import pandas as pd
 from Bio import Entrez
 
 # ── CONFIG ────────────────────────────────────────────────
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://script.google.com/macros/s/AKfycbz9xB0KC4I0Vj9bWWrZXfkb4hTvVMCYUIj2jiJPgXeLSpkS7eS43Sg4B3zJcN2jvHvObA/exec")
-Entrez.email = "bioprintinglabsinc@gmail.com"
+WEBAPP_URL     = os.getenv("WEBAPP_URL", "https://script.google.com/macros/s/AKfycbz9xB0KC4I0Vj9bWWrZXfkb4hTvVMCYUIj2jiJPgXeLSpkS7eS43Sg4B3zJcN2jvHvObA/exec")
+Entrez.email   = "bioprintinglabsinc@gmail.com"
 Entrez.api_key = os.getenv("NCBI_API_KEY", "")
+RETMAX         = 200  # per year
 
-RETMAX = 100  # results per year per run
-
-# ── CATEGORY KEYWORD MAP (title + abstract) ───────────────
-CATEGORY_KEYWORDS = {
-    "MPS":              ["mps", "organ-on-chip", "organ on chip", "microphysiological", "microfluidic organ"],
-    "NAMS":             ["nam", "nams", "new approach method", "non-animal model", "alternative method"],
-    "Microbiology":     ["microbiome", "microbial", "bacterio", "microorganism", "gut flora", "pathogen", "microbiota"],
-    "Immuno Oncology":  ["immuno-oncology", "immunotherapy", "checkpoint inhibitor", "car-t", "tumor immunology",
-                         "cancer immunology", "pd-l1", "pd-1", "ctla-4", "oncolytic", "immuno oncology"],
-    "Organoid":         ["organoid", "tubuloïd", "tubuloid", "enteroid", "colonoid", "cerebroid",
-                         "liver organoid", "intestinal organoid", "mini-gut", "mini gut"]
-}
-
-# ── JUNK FILTER ───────────────────────────────────────────
-JUNK_KEYWORDS = [
-    "hair follicle", "alopecia", "dental", "dentistry", "epilepsy",
-    "cholesterol", "vision loss", "retinal degeneration", "systematic review",
-    "meta-analysis", "narrative review", "scoping review"
+# ── ALWAYS-EXCLUDED PUBLICATION TYPES (not user-editable) ─
+# These are PubMed [pt] field filters — objective publication type tags
+# Reviews, editorials etc. are always excluded — these are not wet lab researchers
+PUBMED_EXCLUDE_TYPES = [
+    "Review[pt]",
+    "Systematic Review[pt]",
+    "Meta-Analysis[pt]",
+    "Editorial[pt]",
+    "Letter[pt]",
+    "Comment[pt]",
+    "News[pt]",
+    "Case Reports[pt]",
+    "Retracted Publication[pt]",
+    "Preprint[pt]",
 ]
+
+# These strings appear in the XML PublicationType list — secondary filter
+BLOCKED_PUB_TYPE_STRINGS = {
+    "review", "systematic review", "meta-analysis", "editorial",
+    "letter", "comment", "news", "case reports", "retracted publication",
+    "preprint", "published erratum", "expression of concern",
+    "guideline", "practice guideline", "lecture",
+    "consensus development conference",
+}
 
 # ── HELPERS ───────────────────────────────────────────────
 def read_file(path, default=""):
     if os.path.exists(path):
-        val = open(path).read().strip()
-        return val if val else default
+        v = open(path).read().strip()
+        return v if v else default
     return default
 
 def write_file(path, val):
-    with open(path, "w") as f:
-        f.write(str(val))
+    open(path, "w").write(str(val))
 
-def classify(title, abstract):
-    """Return category name based on title + abstract keyword match."""
+def load_json(path):
+    with open(path, "r") as f:
+        return json.load(f)
+
+def classify(title, abstract, category_keywords):
+    """Route to category tab using sheet-provided keywords. First match wins."""
     text = (title + " " + abstract).lower()
-    # Priority order matters — most specific first
-    for category in ["MPS", "NAMS", "Microbiology", "Immuno Oncology", "Organoid"]:
-        for kw in CATEGORY_KEYWORDS[category]:
-            if kw in text:
-                return category
-    return "Organoid"  # fallback
+    for cat, keywords in category_keywords.items():
+        for kw in keywords:
+            if kw.lower().strip() in text:
+                return cat
+    # Fallback to first category
+    return list(category_keywords.keys())[0] if category_keywords else "Organoid"
 
-def is_junk(title, abstract):
+def is_junk(title, abstract, junk_subjects):
+    """Skip article if any junk keyword appears in title or abstract."""
     text = (title + " " + abstract).lower()
-    return any(j in text for j in JUNK_KEYWORDS)
+    return any(j.lower().strip() in text for j in junk_subjects)
 
-def extract_email(affiliation_str):
-    emails = re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', affiliation_str)
-    for e in emails:
-        e = e.lower()
-        if "protected" not in e and "example" not in e:
-            return e
+def is_review_by_pubtype(article_xml):
+    """Secondary check: scan XML PublicationType list."""
+    try:
+        pub_types = article_xml.get("PubmedData", {}).get("PublicationTypeList", [])
+        for pt in pub_types:
+            if str(pt).lower() in BLOCKED_PUB_TYPE_STRINGS:
+                return True
+    except Exception:
+        pass
+    return False
+
+def extract_email_from_text(text):
+    """
+    Extract best email from affiliation string.
+    Priority 1: 'Electronic address:' — PubMed's explicit corresponding author marker
+    Priority 2: Any valid institutional email
+    """
+    if not text:
+        return None
+    text = str(text)
+
+    # Priority 1: Electronic address marker
+    ea = re.search(
+        r'[Ee]lectronic\s+address[:\s]+([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})',
+        text
+    )
+    if ea:
+        return ea.group(1).lower().strip(".")
+
+    # Priority 2: Any email
+    candidates = re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', text)
+    for email in candidates:
+        email = email.lower().strip(".")
+        if any(bad in email for bad in ["protected", "example", "doi.org", "elsevier", "springer", "wiley"]):
+            continue
+        if re.search(r'\.(edu|com|org|net|gov|ac\.[a-z]{2}|[a-z]{2})$', email):
+            return email
     return None
 
-# ── MAIN SCRAPE ───────────────────────────────────────────
-def scrape():
-    print("🎯 BPL Sniper V2000: Initializing...")
+def get_abstract(med):
+    ab = med.get("Abstract", {})
+    if not ab:
+        return ""
+    texts = ab.get("AbstractText", [])
+    if isinstance(texts, list):
+        return " ".join(str(x) for x in texts)
+    return str(texts)
 
+def get_email_and_author(med):
+    """
+    4-tier email extraction strategy:
+    1. 'Electronic address:' anywhere in any affiliation (most reliable)
+    2. Last author affiliations (usually PI / corresponding author)
+    3. All authors front-to-back
+    4. Combined affiliation string scan
+    Returns (email, author_name, affiliation) or (None, None, None)
+    """
+    authors = med.get("AuthorList", [])
+    if not authors:
+        return None, None, None
+
+    all_pairs = []  # (author_name, affiliation_string)
+    for auth in authors:
+        name = f"{auth.get('ForeName', '')} {auth.get('LastName', '')}".strip()
+        for aff_info in auth.get("AffiliationInfo", []):
+            aff_str = aff_info.get("Affiliation", "")
+            if aff_str:
+                all_pairs.append((name, aff_str))
+
+    if not all_pairs:
+        return None, None, None
+
+    # Tier 1: Electronic address marker
+    for name, aff in all_pairs:
+        if "lectronic address" in aff:
+            email = extract_email_from_text(aff)
+            if email:
+                return email, name, aff[:300]
+
+    # Tier 2: Last author first (corresponding author convention)
+    for name, aff in reversed(all_pairs):
+        email = extract_email_from_text(aff)
+        if email:
+            return email, name, aff[:300]
+
+    # Tier 3: Front-to-back
+    for name, aff in all_pairs:
+        email = extract_email_from_text(aff)
+        if email:
+            return email, name, aff[:300]
+
+    # Tier 4: Combined scan
+    combined = " ".join(aff for _, aff in all_pairs)
+    email = extract_email_from_text(combined)
+    if email:
+        for name, aff in all_pairs:
+            if email in aff.lower():
+                return email, name, aff[:300]
+        return email, all_pairs[-1][0], combined[:300]
+
+    return None, None, None
+
+# ── MAIN ─────────────────────────────────────────────────
+def scrape():
+    print("🎯 BPL Sniper V2000 — Sheet-Driven Keywords")
+    print("=" * 50)
+
+    # Load query params
     query = read_file("last_query.txt")
     if not query:
-        print("❌ No search keyword found. Halted.")
+        print("❌ No search keyword in last_query.txt — halted.")
+        write_file("system_status.txt", "ERROR")
         return
 
     start_year = int(read_file("start_year_limit.txt", "2020"))
-    current_year = int(read_file("year_checkpoint.txt", str(datetime.datetime.now().year)))
+    end_year   = int(read_file("year_checkpoint.txt", str(datetime.datetime.now().year)))
 
-    if current_year < start_year:
-        print("🏁 Full year range complete. Nothing more to do.")
+    # Load keywords from sheet-generated JSON files
+    if not os.path.exists("category_keywords.json"):
+        print("❌ category_keywords.json not found — check Keywords tab in sheet")
+        write_file("system_status.txt", "ERROR")
+        return
+
+    if not os.path.exists("exclude_keywords.json"):
+        print("❌ exclude_keywords.json not found — check Keywords tab in sheet")
+        write_file("system_status.txt", "ERROR")
+        return
+
+    try:
+        category_keywords = load_json("category_keywords.json")
+        exclude_data      = load_json("exclude_keywords.json")
+        junk_subjects     = exclude_data.get("junk_subjects", [])
+
+        print(f"✅ {len(category_keywords)} categories loaded:")
+        for cat, kws in category_keywords.items():
+            print(f"   {cat}: {len(kws)} keywords")
+        print(f"✅ {len(junk_subjects)} junk filters loaded")
+    except Exception as ex:
+        print(f"❌ Failed to load keyword files: {ex}")
+        write_file("system_status.txt", "ERROR")
+        return
+
+    print(f"\n📋 Query: '{query}'  |  Years: {start_year}–{end_year}")
+
+    if end_year < start_year:
+        print("🏁 All years already processed.")
         write_file("system_status.txt", "COMPLETED")
         return
 
     write_file("system_status.txt", "RUNNING")
 
-    # Load existing leads for dedup
+    # Load existing for dedup
     existing_emails = set()
+    existing_pmids  = set()
     if os.path.exists("leads.csv"):
         try:
-            df_existing = pd.read_csv("leads.csv")
-            existing_emails = set(df_existing["email"].str.lower().dropna().tolist())
-        except Exception:
-            pass
+            df_old = pd.read_csv("leads.csv")
+            if "email" in df_old.columns:
+                existing_emails = set(df_old["email"].str.lower().dropna().tolist())
+            if "pmid" in df_old.columns:
+                existing_pmids = set(df_old["pmid"].astype(str).tolist())
+            print(f"📂 Existing: {len(df_old)} leads | {len(existing_emails)} known emails")
+        except Exception as ex:
+            print(f"⚠️  Could not read leads.csv: {ex}")
 
-    search_term = f"({query}[Title/Abstract]) AND {current_year}[dp]"
-    print(f"🔍 Query: {search_term}")
+    # Build PubMed review exclusion string
+    exclusion_str = " NOT (" + " OR ".join(PUBMED_EXCLUDE_TYPES) + ")"
 
-    try:
-        handle = Entrez.esearch(db="pubmed", term=search_term, retmax=RETMAX)
-        record = Entrez.read(handle)
-        ids = record.get("IdList", [])
-    except Exception as ex:
-        print(f"❌ PubMed search error: {ex}")
-        write_file("system_status.txt", "ERROR")
-        return
-
-    if not ids:
-        print(f"📭 No results for {current_year}. Moving to previous year.")
-        write_file("year_checkpoint.txt", str(current_year - 1))
-        write_file("system_status.txt", "IDLE")
-        return
-
-    print(f"📄 Found {len(ids)} articles for {current_year}.")
-
-    try:
-        fetch_handle = Entrez.efetch(db="pubmed", id=",".join(ids), retmode="xml")
-        articles = Entrez.read(fetch_handle)
-    except Exception as ex:
-        print(f"❌ PubMed fetch error: {ex}")
-        write_file("system_status.txt", "ERROR")
-        return
-
-    leads = []
+    all_new_leads = []
     today = datetime.datetime.now().strftime("%m/%d/%Y")
+    years = list(range(end_year, start_year - 1, -1))
+    print(f"📅 Searching {len(years)} year(s): {years}\n")
 
-    for art in articles.get("PubmedArticle", []):
+    for year in years:
+        # Layer 1: PubMed excludes reviews at search level
+        term = f"({query}[Title/Abstract]) AND {year}[dp]{exclusion_str}"
+        print(f"🔍 {year}...")
+
         try:
-            med  = art["MedlineCitation"]["Article"]
-            pmid = str(art["MedlineCitation"]["PMID"])
-
-            # ── Title ──────────────────────────────────────
-            title = str(med.get("ArticleTitle", "")).strip()
-            if not title or title == "No Title":
-                continue
-
-            # ── Abstract ───────────────────────────────────
-            abstract = ""
-            ab_obj = med.get("Abstract", {})
-            if ab_obj:
-                ab_texts = ab_obj.get("AbstractText", [])
-                if isinstance(ab_texts, list):
-                    abstract = " ".join(str(x) for x in ab_texts)
-                else:
-                    abstract = str(ab_texts)
-
-            # ── Junk check ─────────────────────────────────
-            if is_junk(title, abstract):
-                continue
-
-            # ── Category ───────────────────────────────────
-            category = classify(title, abstract)
-
-            # ── Journal ────────────────────────────────────
-            journal = med.get("Journal", {}).get("Title", "N/A")
-
-            # ── Authors + emails ───────────────────────────
-            for auth in med.get("AuthorList", []):
-                for aff_info in auth.get("AffiliationInfo", []):
-                    aff_str = aff_info.get("Affiliation", "")
-                    email = extract_email(aff_str)
-                    if not email:
-                        continue
-                    if email in existing_emails:
-                        continue
-
-                    author_name = f"{auth.get('ForeName', '')} {auth.get('LastName', '')}".strip()
-
-                    leads.append({
-                        "category":    category,
-                        "title":       title,
-                        "author":      author_name,
-                        "email":       email,
-                        "journal":     journal,
-                        "year":        current_year,
-                        "institution": aff_str[:250],
-                        "sync_date":   today,
-                        "pmid":        pmid,
-                        "source":      "PubMed_API",
-                        "area":        query,
-                        "abstract":    abstract[:500]
-                    })
-                    existing_emails.add(email)
-                    break  # one email per author
-
-        except Exception as e:
-            print(f"  ⚠️ Parse error on article: {e}")
+            h   = Entrez.esearch(db="pubmed", term=term, retmax=RETMAX)
+            ids = Entrez.read(h).get("IdList", [])
+        except Exception as ex:
+            print(f"  ❌ Search error: {ex}")
             continue
 
-    # ── Save & Push ────────────────────────────────────────
-    if leads:
-        df_new = pd.DataFrame(leads)
+        if not ids:
+            print(f"  📭 0 results")
+            continue
 
-        # Merge with existing
+        print(f"  📄 {len(ids)} articles (reviews excluded at search level)")
+
+        try:
+            fh       = Entrez.efetch(db="pubmed", id=",".join(ids), retmode="xml")
+            articles = Entrez.read(fh)
+            time.sleep(0.35)  # NCBI rate limit
+        except Exception as ex:
+            print(f"  ❌ Fetch error: {ex}")
+            continue
+
+        found    = 0
+        no_email = 0
+        review   = 0
+        junk     = 0
+        dup      = 0
+
+        for art in articles.get("PubmedArticle", []):
+            try:
+                med  = art["MedlineCitation"]["Article"]
+                pmid = str(art["MedlineCitation"]["PMID"])
+
+                if pmid in existing_pmids:
+                    dup += 1
+                    continue
+
+                title    = str(med.get("ArticleTitle", "")).strip()
+                abstract = get_abstract(med)
+                if not title:
+                    continue
+
+                # Layer 2: XML publication type double-check
+                if is_review_by_pubtype(art):
+                    review += 1
+                    continue
+
+                # Layer 3: Junk subject filter (from sheet)
+                if is_junk(title, abstract, junk_subjects):
+                    junk += 1
+                    continue
+
+                # Email extraction
+                email, author_name, affiliation = get_email_and_author(med)
+                if not email:
+                    no_email += 1
+                    continue
+
+                email = email.lower().strip()
+                if email in existing_emails:
+                    dup += 1
+                    continue
+
+                # Category routing using sheet keywords
+                category = classify(title, abstract, category_keywords)
+                journal  = med.get("Journal", {}).get("Title", "N/A")
+
+                lead = {
+                    "category":    category,
+                    "area":        category,   # doPost reads "area" to route to correct tab
+                    "title":       title,
+                    "author":      author_name or "",
+                    "email":       email,
+                    "journal":     journal,
+                    "year":        year,
+                    "institution": affiliation or "",
+                    "sync_date":   today,
+                    "pmid":        pmid,
+                    "source":      "PubMed_API",
+                }
+
+                all_new_leads.append(lead)
+                existing_emails.add(email)
+                existing_pmids.add(pmid)
+                found += 1
+
+            except Exception as ex:
+                print(f"  ⚠️  Parse error: {ex}")
+                continue
+
+        print(f"  ✅ {found} leads  |  📧 {no_email} no-email  |  "
+              f"📰 {review} review  |  🗑️  {junk} junk  |  🔁 {dup} dup")
+
+    # Save
+    print(f"\n📊 Total new leads this run: {len(all_new_leads)}")
+
+    if all_new_leads:
+        df_new = pd.DataFrame(all_new_leads)
         if os.path.exists("leads.csv"):
-            df_old = pd.read_csv("leads.csv")
-            df_all = pd.concat([df_old, df_new], ignore_index=True)
-            df_all.drop_duplicates(subset=["email"], keep="first", inplace=True)
+            try:
+                df_all = pd.concat([pd.read_csv("leads.csv"), df_new], ignore_index=True)
+                df_all.drop_duplicates(subset=["email"], keep="first", inplace=True)
+            except Exception:
+                df_all = df_new
         else:
             df_all = df_new
 
         df_all.to_csv("leads.csv", index=False)
-        print(f"✅ {len(leads)} new leads saved. Total: {len(df_all)}")
+        print(f"✅ leads.csv: {len(df_all)} total rows")
 
         # Push to Google Sheet
         if WEBAPP_URL:
             try:
                 resp = requests.post(
                     WEBAPP_URL,
-                    json={"action": "addLeads", "data": leads},
-                    timeout=30
+                    json={"action": "addLeads", "data": all_new_leads},
+                    timeout=45
                 )
-                print(f"📤 Sheet sync: {resp.status_code}")
+                print(f"📤 Sheet sync → HTTP {resp.status_code}: {resp.text[:200]}")
             except Exception as ex:
-                print(f"⚠️ Sheet sync failed: {ex}")
-        else:
-            print("⚠️ WEBAPP_URL not set — skipping sheet sync.")
+                print(f"⚠️  Sheet sync failed: {ex}")
     else:
-        print("🧐 No new unique leads with emails this year.")
+        print("🧐 No new leads with emails found this run.")
+        print("   Tips: try broader search term | check Keywords tab has correct keywords")
 
-    # ── Decrement year for next run ────────────────────────
-    write_file("year_checkpoint.txt", str(current_year - 1))
-
-    if current_year - 1 < start_year:
-        write_file("system_status.txt", "COMPLETED")
-        print("🏁 All years scraped. System COMPLETED.")
-    else:
-        write_file("system_status.txt", "IDLE")
-        print(f"📅 Next run will search year: {current_year - 1}")
+    write_file("year_checkpoint.txt", str(start_year - 1))
+    write_file("system_status.txt", "COMPLETED")
+    print("\n🏁 Done — status: COMPLETED")
 
 if __name__ == "__main__":
     scrape()
