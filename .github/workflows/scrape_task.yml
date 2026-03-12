@@ -1,4 +1,4 @@
-name: BPL Remote Handshake V2
+name: BPL Remote Handshake V3
 
 on:
   repository_dispatch:
@@ -6,13 +6,19 @@ on:
   workflow_dispatch:
     inputs:
       query:
-        description: 'Search keyword/query'
+        description: 'Search keyword'
         required: false
       start_year:
         description: 'Start year'
         required: false
       end_year:
         description: 'End year'
+        required: false
+      category_keywords:
+        description: 'JSON from Keywords tab: {Category:[kw,...]}'
+        required: false
+      exclude_keywords:
+        description: 'JSON from Keywords tab: {junk_subjects:[...]}'
         required: false
 
 jobs:
@@ -25,79 +31,109 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
-      # ── 1. Checkout ────────────────────────────────────────
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # ── 2. Python Setup ────────────────────────────────────
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ── 3. Sync Parameters from Sheet ─────────────────────
       - name: Sync Parameters from BPL Dashboard
         env:
-          QUERY:      ${{ github.event.client_payload.query      || inputs.query }}
-          START_YEAR: ${{ github.event.client_payload.start_year || inputs.start_year }}
-          END_YEAR:   ${{ github.event.client_payload.end_year   || inputs.end_year }}
+          QUERY:             ${{ github.event.client_payload.query             || inputs.query }}
+          START_YEAR:        ${{ github.event.client_payload.start_year        || inputs.start_year || '2020' }}
+          END_YEAR:          ${{ github.event.client_payload.end_year          || inputs.end_year }}
+          CATEGORY_KEYWORDS: ${{ github.event.client_payload.category_keywords || inputs.category_keywords }}
+          EXCLUDE_KEYWORDS:  ${{ github.event.client_payload.exclude_keywords  || inputs.exclude_keywords }}
         run: |
-          echo "📥 Received parameters:"
+          CURRENT_YEAR=$(date +%Y)
+          END=${END_YEAR:-$CURRENT_YEAR}
+
+          echo "📥 Parameters received:"
           echo "  Query:      $QUERY"
           echo "  Start Year: $START_YEAR"
-          echo "  End Year:   $END_YEAR"
+          echo "  End Year:   $END"
 
           if [[ -n "$QUERY" ]]; then
+            PREV_QUERY=$(cat last_query.txt 2>/dev/null || echo "")
+
+            # Only reset year_checkpoint if query changed
+            if [[ "$QUERY" != "$PREV_QUERY" ]]; then
+              echo "$END" > year_checkpoint.txt
+              echo "🆕 New query detected — year checkpoint reset to $END"
+            else
+              # Same query — preserve checkpoint so we resume where we left off
+              if [[ ! -f year_checkpoint.txt ]]; then
+                echo "$END" > year_checkpoint.txt
+              fi
+              echo "♻️  Same query — resuming from year: $(cat year_checkpoint.txt)"
+            fi
+
             echo "$QUERY"      > last_query.txt
             echo "$START_YEAR" > start_year_limit.txt
-            echo "$END_YEAR"   > year_checkpoint.txt
-            echo "✅ Parameters written to state files."
           else
             echo "⚠️  No query received — using existing state files."
           fi
 
-      # ── 4. Install Dependencies ────────────────────────────
-      - name: Install Dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+          # Write category keywords JSON (from Keywords tab in sheet)
+          if [[ -n "$CATEGORY_KEYWORDS" ]]; then
+            echo "$CATEGORY_KEYWORDS" > category_keywords.json
+            echo "✅ category_keywords.json written"
+          else
+            echo "⚠️  No category_keywords in payload — using existing file if present"
+          fi
 
-      # ── 5. Run Scraper ─────────────────────────────────────
+          # Write exclude keywords JSON (from Keywords tab in sheet)
+          if [[ -n "$EXCLUDE_KEYWORDS" ]]; then
+            echo "$EXCLUDE_KEYWORDS" > exclude_keywords.json
+            echo "✅ exclude_keywords.json written"
+          else
+            echo "⚠️  No exclude_keywords in payload — using existing file if present"
+          fi
+
+          echo ""
+          echo "📋 State files:"
+          echo "  last_query.txt:       $(cat last_query.txt 2>/dev/null || echo 'MISSING')"
+          echo "  start_year_limit.txt: $(cat start_year_limit.txt 2>/dev/null || echo 'MISSING')"
+          echo "  year_checkpoint.txt:  $(cat year_checkpoint.txt 2>/dev/null || echo 'MISSING')"
+          [[ -f category_keywords.json ]] && echo "  category_keywords.json: present" || echo "  category_keywords.json: MISSING"
+          [[ -f exclude_keywords.json  ]] && echo "  exclude_keywords.json:  present" || echo "  exclude_keywords.json:  MISSING"
+
+      - name: Install Dependencies
+        run: pip install --upgrade pip && pip install -r requirements.txt
+
       - name: Run BPL Sniper
         env:
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
           WEBAPP_URL:   ${{ secrets.WEBAPP_URL }}
-        run: |
-          python scraper.py
+        run: python scraper.py 2>&1
 
-      # ── 6. Commit State & Data Backup ─────────────────────
       - name: Commit State & Data Backup
         run: |
           git config --local user.email "bpl-bot@bioprintinglabs.com"
           git config --local user.name "BPL_Bot"
-
-          git add last_query.txt year_checkpoint.txt start_year_limit.txt system_status.txt || true
-          git add leads.csv || true
-
-          QUERY_LABEL=$(cat last_query.txt 2>/dev/null || echo "unknown")
+          git add last_query.txt year_checkpoint.txt start_year_limit.txt \
+                  system_status.txt category_keywords.json exclude_keywords.json 2>/dev/null || true
+          git add leads.csv 2>/dev/null || true
+          QUERY_LABEL=$(cat last_query.txt  2>/dev/null || echo "unknown")
           YEAR_LABEL=$(cat year_checkpoint.txt 2>/dev/null || echo "unknown")
-          STATUS_LABEL=$(cat system_status.txt 2>/dev/null || echo "unknown")
-
-          git commit -m "BPL Sync [$QUERY_LABEL | yr:$YEAR_LABEL | $STATUS_LABEL] [skip ci]" || echo "Nothing to commit."
+          STATUS=$(cat system_status.txt 2>/dev/null || echo "unknown")
+          LEADS=$(python3 -c "import pandas as pd; df=pd.read_csv('leads.csv'); print(len(df))" 2>/dev/null || echo "0")
+          git commit -m "BPL [$QUERY_LABEL | yr:$YEAR_LABEL | $STATUS | leads:$LEADS] [skip ci]" || echo "Nothing to commit."
           git push origin main || echo "Nothing to push."
 
-      # ── 7. Notify Sheet of Final Status ───────────────────
       - name: Notify Sheet — Final Status
         if: always()
         env:
           WEBAPP_URL: ${{ secrets.WEBAPP_URL }}
         run: |
           STATUS=$(cat system_status.txt 2>/dev/null || echo "UNKNOWN")
+          echo "📡 Sending final status to sheet: $STATUS"
           if [[ -n "$WEBAPP_URL" ]]; then
-            curl -s -X POST "$WEBAPP_URL" \
+            curl -s -w "\nHTTP:%{http_code}" -X POST "$WEBAPP_URL" \
               -H "Content-Type: application/json" \
-              -d "{\"action\": \"updateStatus\", \"status\": \"$STATUS\"}" \
-              || echo "Status ping failed (non-fatal)."
+              -d "{\"action\": \"updateStatus\", \"status\": \"$STATUS\"}"
           fi
